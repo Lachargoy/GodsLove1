@@ -1,11 +1,11 @@
 <?php
 
 use App\Models\CategoriaProducto;
-use App\Models\InventoryItem;
 use App\Models\Insumo;
+use App\Models\InventoryItem;
 use App\Models\Producto;
-use App\Models\ProductOptionGroup;
 use App\Models\ProductoInsumo;
+use App\Models\ProductOptionGroup;
 use App\Models\Unit;
 use App\Models\User;
 use Database\Seeders\CategoriaGastoSeeder;
@@ -104,6 +104,40 @@ test('puede activar y desactivar producto', function () {
         ->assertSee('Desactivar');
 
     expect((bool) $producto->fresh()->activo)->toBeTrue();
+});
+
+test('puede editar precio y costo de un producto existente', function () {
+    $producto = Producto::query()->where('nombre', 'Cono sencillo')->firstOrFail();
+    $categoria = CategoriaProducto::query()->where('nombre', 'Toppings')->firstOrFail();
+
+    Livewire::test('productos.index')
+        ->call('editarProducto', $producto->id)
+        ->assertSet('editing_producto_id', (string) $producto->id)
+        ->assertSet('nombre', 'Cono sencillo')
+        ->set('categoria_producto_id', (string) $categoria->id)
+        ->set('precio_venta', '42.50')
+        ->set('costo_estimado', '11.25')
+        ->call('guardar')
+        ->assertHasNoErrors()
+        ->assertSet('editing_producto_id', '')
+        ->assertSee('Producto actualizado correctamente.')
+        ->assertSee('$42.50');
+
+    expect($producto->fresh())
+        ->categoria_producto_id->toBe($categoria->id)
+        ->and((float) $producto->fresh()->precio_venta)->toBe(42.5)
+        ->and((float) $producto->fresh()->costo_estimado)->toBe(11.25);
+});
+
+test('filtrar por categoria no cambia la categoria del formulario', function () {
+    $helados = CategoriaProducto::query()->where('nombre', 'Helados')->firstOrFail();
+    $toppings = CategoriaProducto::query()->where('nombre', 'Toppings')->firstOrFail();
+
+    Livewire::test('productos.index')
+        ->set('categoria_producto_id', (string) $helados->id)
+        ->set('filtro_categoria_producto_id', (string) $toppings->id)
+        ->assertSet('categoria_producto_id', (string) $helados->id)
+        ->assertSet('filtro_categoria_producto_id', (string) $toppings->id);
 });
 
 test('puede crear producto configurable con grupo sabores desde alta de productos', function () {

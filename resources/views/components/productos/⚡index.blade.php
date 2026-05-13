@@ -12,6 +12,8 @@ use Livewire\Component;
 new class extends Component
 {
     public string $search = '';
+    public string $filtro_categoria_producto_id = '';
+    public string $editing_producto_id = '';
     public string $categoria_producto_id = '';
     public string $nombre = '';
     public string $descripcion = '';
@@ -60,8 +62,8 @@ new class extends Component
             ->when($this->search !== '', function ($query) {
                 $query->where('nombre', 'like', '%'.trim($this->search).'%');
             })
-            ->when($this->categoria_producto_id !== '', function ($query) {
-                $query->where('categoria_producto_id', $this->categoria_producto_id);
+            ->when($this->filtro_categoria_producto_id !== '', function ($query) {
+                $query->where('categoria_producto_id', $this->filtro_categoria_producto_id);
             })
             ->orderByDesc('created_at')
             ->get();
@@ -166,7 +168,13 @@ new class extends Component
             return;
         }
 
-        $producto = Producto::query()->create([
+        $isEditing = $this->editing_producto_id !== '';
+
+        $producto = $isEditing
+            ? Producto::query()->findOrFail($this->editing_producto_id)
+            : new Producto(['activo' => true]);
+
+        $producto->fill([
             'categoria_producto_id' => $validated['categoria_producto_id'] ?: null,
             'nombre' => trim($validated['nombre']),
             'descripcion' => $validated['descripcion'] ?: null,
@@ -174,8 +182,7 @@ new class extends Component
             'costo_estimado' => $validated['costo_estimado'] ?: 0,
             'product_type' => $validated['product_type'],
             'inventory_item_id' => $validated['product_type'] === 'simple' ? $validated['inventory_item_id'] : null,
-            'activo' => true,
-        ]);
+        ])->save();
 
         if ($validated['product_type'] === 'simple') {
             InventoryItem::query()
@@ -184,13 +191,20 @@ new class extends Component
         }
 
         if ($validated['product_type'] === 'configurable') {
-            ProductOptionGroup::query()->create([
-                'product_id' => $producto->id,
+            $groupAttributes = [
                 'name' => trim($validated['option_group_name'] ?: 'Sabores'),
                 'required_quantity' => (float) ($validated['required_quantity'] ?: 2),
                 'min_quantity' => (float) ($validated['required_quantity'] ?: 2),
                 'max_quantity' => (float) ($validated['required_quantity'] ?: 2),
-            ]);
+            ];
+
+            $optionGroup = $producto->productOptionGroups()->first();
+
+            if ($optionGroup) {
+                $optionGroup->update($groupAttributes);
+            } else {
+                $producto->productOptionGroups()->create($groupAttributes);
+            }
         }
 
         if ($recetaInicial->isNotEmpty()) {
@@ -199,7 +213,10 @@ new class extends Component
             foreach ($recetaInicial as $item) {
                 if (blank($item['insumo_id'] ?? null) || blank($item['cantidad_requerida'] ?? null)) {
                     $this->addError('receta', 'Cada linea de receta debe incluir insumo y cantidad requerida.');
-                    $producto->delete();
+
+                    if (! $isEditing) {
+                        $producto->delete();
+                    }
 
                     return;
                 }
@@ -237,22 +254,29 @@ new class extends Component
             ]);
         }
 
-        $this->reset([
-            'categoria_producto_id',
-            'nombre',
-            'descripcion',
-            'precio_venta',
-            'costo_estimado',
-            'product_type',
-            'inventory_item_id',
-            'option_group_name',
-            'required_quantity',
-        ]);
+        $message = $isEditing
+            ? 'Producto actualizado correctamente.'
+            : 'Producto creado correctamente.';
 
-        $this->product_type = 'prepared';
-        $this->option_group_name = 'Sabores';
-        $this->required_quantity = '2';
+        $this->resetProductForm();
 
+        session()->flash('success', $message);
+    }
+
+    public function editarProducto(int $productoId): void
+    {
+        $producto = Producto::query()->findOrFail($productoId);
+
+        $this->editing_producto_id = (string) $producto->id;
+        $this->categoria_producto_id = (string) ($producto->categoria_producto_id ?? '');
+        $this->nombre = $producto->nombre;
+        $this->descripcion = $producto->descripcion ?? '';
+        $this->precio_venta = (string) $producto->precio_venta;
+        $this->costo_estimado = (string) $producto->costo_estimado;
+        $this->product_type = $producto->product_type;
+        $this->inventory_item_id = (string) ($producto->inventory_item_id ?? '');
+        $this->option_group_name = $producto->productOptionGroups()->first()?->name ?? 'Sabores';
+        $this->required_quantity = (string) ($producto->productOptionGroups()->first()?->required_quantity ?? 2);
         $this->receta = [
             [
                 'insumo_id' => '',
@@ -260,7 +284,12 @@ new class extends Component
             ],
         ];
 
-        session()->flash('success', 'Producto creado correctamente.');
+        $this->resetErrorBag();
+    }
+
+    public function cancelarEdicion(): void
+    {
+        $this->resetProductForm();
     }
 
     public function toggleActivo(int $productoId): void
@@ -283,8 +312,36 @@ new class extends Component
     {
         $this->reset([
             'search',
-            'categoria_producto_id',
+            'filtro_categoria_producto_id',
         ]);
+    }
+
+    private function resetProductForm(): void
+    {
+        $this->reset([
+            'editing_producto_id',
+            'categoria_producto_id',
+            'nombre',
+            'descripcion',
+            'precio_venta',
+            'costo_estimado',
+            'product_type',
+            'inventory_item_id',
+            'option_group_name',
+            'required_quantity',
+        ]);
+
+        $this->product_type = 'prepared';
+        $this->option_group_name = 'Sabores';
+        $this->required_quantity = '2';
+        $this->receta = [
+            [
+                'insumo_id' => '',
+                'cantidad_requerida' => '',
+            ],
+        ];
+
+        $this->resetErrorBag();
     }
 };
 ?>
@@ -337,13 +394,25 @@ new class extends Component
         <div class="app-card">
             <div class="mb-6 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                 <div>
-                    <h2 class="text-xl font-semibold text-slate-950">Nuevo producto</h2>
-                    <p class="mt-1 text-sm text-slate-500">Registra un producto nuevo y elige una estructura mas clara segun como se vende y descuenta inventario.</p>
+                    <h2 class="text-xl font-semibold text-slate-950">{{ $editing_producto_id !== '' ? 'Editar producto' : 'Nuevo producto' }}</h2>
+                    <p class="mt-1 text-sm text-slate-500">
+                        {{ $editing_producto_id !== '' ? 'Ajusta nombre, categoria, precio, costo y tipo del producto seleccionado.' : 'Registra un producto nuevo y elige una estructura mas clara segun como se vende y descuenta inventario.' }}
+                    </p>
                 </div>
 
-                <div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                    Flujo guiado para evitar errores visuales
-                </div>
+                @if ($editing_producto_id !== '')
+                    <button
+                        type="button"
+                        wire:click="cancelarEdicion"
+                        class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                    >
+                        Cancelar edicion
+                    </button>
+                @else
+                    <div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                        Flujo guiado para evitar errores visuales
+                    </div>
+                @endif
             </div>
 
             <form wire:submit="guardar" class="space-y-6">
@@ -645,7 +714,7 @@ new class extends Component
 
                 <div class="flex flex-wrap items-center gap-3">
                     <button type="submit" class="app-primary-button">
-                        Guardar producto
+                        {{ $editing_producto_id !== '' ? 'Actualizar producto' : 'Guardar producto' }}
                     </button>
 
                     <p class="text-xs text-slate-500">
@@ -705,7 +774,7 @@ new class extends Component
 
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">Filtrar por categoria</label>
-                        <select wire:model.live="categoria_producto_id" class="w-full rounded-2xl border-slate-300 bg-white text-sm">
+                        <select wire:model.live="filtro_categoria_producto_id" class="w-full rounded-2xl border-slate-300 bg-white text-sm">
                             <option value="">Todas las categorias</option>
 
                             @foreach ($this->categorias as $categoria)
@@ -792,6 +861,14 @@ new class extends Component
                                     >
                                         Editar receta
                                     </a>
+
+                                    <button
+                                        type="button"
+                                        wire:click="editarProducto({{ $producto->id }})"
+                                        class="inline-flex items-center rounded-xl border border-amber-200 px-3 py-1.5 text-xs font-medium text-amber-700 transition hover:bg-amber-50"
+                                    >
+                                        Editar producto
+                                    </button>
 
                                     <button
                                         type="button"
