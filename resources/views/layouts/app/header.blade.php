@@ -13,6 +13,9 @@
                 <flux:navbar.item icon="layout-grid" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
                     {{ __('Dashboard') }}
                 </flux:navbar.item>
+                <flux:navbar.item icon="sparkles" :href="route('asistente.index')" :current="request()->routeIs('asistente.*')" wire:navigate>
+                    {{ __('Asistente') }}
+                </flux:navbar.item>
                 <flux:navbar.item icon="shopping-bag" :href="route('productos.index')" :current="request()->routeIs('productos.*')" wire:navigate>
                     {{ __('Productos') }}
                 </flux:navbar.item>
@@ -76,6 +79,9 @@
                 <flux:sidebar.group :heading="__('Platform')">
                     <flux:sidebar.item icon="layout-grid" :href="route('dashboard')" :current="request()->routeIs('dashboard')" wire:navigate>
                         {{ __('Dashboard')  }}
+                    </flux:sidebar.item>
+                    <flux:sidebar.item icon="sparkles" :href="route('asistente.index')" :current="request()->routeIs('asistente.*')" wire:navigate>
+                        {{ __('Asistente') }}
                     </flux:sidebar.item>
                     <flux:sidebar.item icon="shopping-bag" :href="route('productos.index')" :current="request()->routeIs('productos.*')" wire:navigate>
                         {{ __('Productos') }}

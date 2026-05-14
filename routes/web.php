@@ -34,6 +34,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
 
     Volt::route('/gastos', 'gastos.index')
         ->name('gastos.index');
+
+    Volt::route('/asistente', 'asistente.index')
+        ->name('asistente.index');
 });
 
 require __DIR__.'/settings.php';

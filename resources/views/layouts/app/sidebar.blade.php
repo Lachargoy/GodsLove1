@@ -10,6 +10,7 @@
                     'label' => 'Hoy',
                     'items' => [
                         ['label' => 'Dashboard', 'description' => 'Vista general', 'route' => 'dashboard', 'active' => 'dashboard', 'icon' => 'home', 'accent' => 'bg-sky-500'],
+                        ['label' => 'Asistente', 'description' => 'IA operativa', 'route' => 'asistente.index', 'active' => 'asistente.*', 'icon' => 'sparkles', 'accent' => 'bg-fuchsia-500'],
                         ['label' => 'Ventas', 'description' => 'Punto de venta', 'route' => 'ventas.punto', 'active' => 'ventas.*', 'icon' => 'shopping-cart', 'accent' => 'bg-orange-500'],
                         ['label' => 'Caja', 'description' => 'Corte diario', 'route' => 'caja.corte', 'active' => 'caja.*', 'icon' => 'banknotes', 'accent' => 'bg-emerald-500'],
                     ],
