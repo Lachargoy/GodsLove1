@@ -27,7 +27,11 @@ Ejecuta operaciones permitidas de GodsLove sin SQL libre. Acciones disponibles:
 consultar_inventario, buscar_producto, resumen_caja, estimar_venta,
 preparar_venta, confirmar_venta, preparar_abrir_caja, confirmar_abrir_caja,
 preparar_cerrar_caja, confirmar_cerrar_caja, preparar_movimiento_inventario,
-confirmar_movimiento_inventario. Las acciones preparar_* no guardan datos y devuelven confirmation_token.
+confirmar_movimiento_inventario, preparar_alta_insumo, confirmar_alta_insumo,
+preparar_alta_categoria, confirmar_alta_categoria, preparar_alta_producto,
+confirmar_alta_producto, preparar_receta_producto, confirmar_receta_producto,
+preparar_opciones_producto, confirmar_opciones_producto.
+Las acciones preparar_* no guardan datos y devuelven confirmation_token.
 Las acciones confirmar_* si modifican datos y requieren confirmation_token.
 TEXT;
     }
@@ -74,6 +78,49 @@ TEXT;
                     notes: data_get($arguments, 'notes'),
                 ),
                 'confirmar_movimiento_inventario' => $this->operations->confirmInventoryMovement((string) data_get($arguments, 'confirmation_token')),
+                'preparar_alta_insumo' => $this->operations->prepareCreateInsumo(
+                    name: (string) data_get($arguments, 'nombre'),
+                    categoryId: $request->filled('categoria_insumo_id') ? $request->integer('categoria_insumo_id') : null,
+                    unitName: (string) data_get($arguments, 'unidad_medida', 'pieza'),
+                    currentStock: (float) data_get($arguments, 'cantidad_actual', 0),
+                    minimumStock: (float) data_get($arguments, 'cantidad_minima', 0),
+                    unitCost: (float) data_get($arguments, 'costo_unitario', 0),
+                    isSellable: $request->boolean('vendible_directo'),
+                ),
+                'confirmar_alta_insumo' => $this->operations->confirmCreateInsumo((string) data_get($arguments, 'confirmation_token')),
+                'preparar_alta_categoria' => $this->operations->prepareCreateCategory(
+                    type: (string) data_get($arguments, 'tipo'),
+                    name: (string) data_get($arguments, 'nombre'),
+                    description: data_get($arguments, 'descripcion'),
+                ),
+                'confirmar_alta_categoria' => $this->operations->confirmCreateCategory((string) data_get($arguments, 'confirmation_token')),
+                'preparar_alta_producto' => $this->operations->prepareCreateProduct(
+                    name: (string) data_get($arguments, 'nombre'),
+                    categoryId: $request->filled('categoria_producto_id') ? $request->integer('categoria_producto_id') : null,
+                    price: (float) data_get($arguments, 'precio_venta', 0),
+                    description: data_get($arguments, 'descripcion'),
+                    estimatedCost: $request->filled('costo_estimado') ? (float) data_get($arguments, 'costo_estimado') : null,
+                    productType: (string) data_get($arguments, 'product_type', 'prepared'),
+                    inventoryItemId: $request->filled('inventory_item_id') ? $request->integer('inventory_item_id') : null,
+                    optionGroupName: data_get($arguments, 'option_group_name'),
+                    requiredQuantity: $request->filled('required_quantity') ? (float) data_get($arguments, 'required_quantity') : null,
+                ),
+                'confirmar_alta_producto' => $this->operations->confirmCreateProduct((string) data_get($arguments, 'confirmation_token')),
+                'preparar_receta_producto' => $this->operations->prepareProductRecipe(
+                    productId: $request->integer('producto_id'),
+                    items: $request->array('recipe_items'),
+                    replace: ! $request->has('replace') || $request->boolean('replace'),
+                ),
+                'confirmar_receta_producto' => $this->operations->confirmProductRecipe((string) data_get($arguments, 'confirmation_token')),
+                'preparar_opciones_producto' => $this->operations->prepareProductOptions(
+                    productId: $request->integer('producto_id'),
+                    groupName: (string) data_get($arguments, 'group_name', 'Sabores'),
+                    requiredQuantity: (float) data_get($arguments, 'required_quantity', 1),
+                    minQuantity: $request->filled('min_quantity') ? (float) data_get($arguments, 'min_quantity') : null,
+                    maxQuantity: $request->filled('max_quantity') ? (float) data_get($arguments, 'max_quantity') : null,
+                    options: $request->array('options'),
+                ),
+                'confirmar_opciones_producto' => $this->operations->confirmProductOptions((string) data_get($arguments, 'confirmation_token')),
                 default => [
                     'status' => 'error',
                     'error' => 'Accion no permitida para el asistente.',
@@ -109,6 +156,16 @@ TEXT;
                     'confirmar_cerrar_caja',
                     'preparar_movimiento_inventario',
                     'confirmar_movimiento_inventario',
+                    'preparar_alta_insumo',
+                    'confirmar_alta_insumo',
+                    'preparar_alta_categoria',
+                    'confirmar_alta_categoria',
+                    'preparar_alta_producto',
+                    'confirmar_alta_producto',
+                    'preparar_receta_producto',
+                    'confirmar_receta_producto',
+                    'preparar_opciones_producto',
+                    'confirmar_opciones_producto',
                 ])
                 ->description('Operacion permitida a ejecutar.')
                 ->required(),
@@ -135,6 +192,40 @@ TEXT;
             'quantity' => $schema->number()->description('Cantidad del movimiento de inventario.')->nullable(),
             'unit_cost' => $schema->number()->description('Costo unitario opcional.')->nullable(),
             'notes' => $schema->string()->description('Notas del movimiento de inventario.')->nullable(),
+            'nombre' => $schema->string()->description('Nombre del nuevo insumo.')->nullable(),
+            'tipo' => $schema->string()->enum(['producto', 'insumo', 'gasto'])->description('Tipo de categoria cuando action=preparar_alta_categoria.')->nullable(),
+            'descripcion' => $schema->string()->description('Descripcion opcional de categoria o producto.')->nullable(),
+            'categoria_insumo_id' => $schema->integer()->description('ID de categoria de insumo opcional.')->nullable(),
+            'unidad_medida' => $schema->string()->description('Unidad del nuevo insumo: pieza, kg, g, litro, ml, etc.')->nullable(),
+            'cantidad_actual' => $schema->number()->description('Stock inicial del nuevo insumo.')->nullable(),
+            'cantidad_minima' => $schema->number()->description('Stock minimo del nuevo insumo.')->nullable(),
+            'costo_unitario' => $schema->number()->description('Costo unitario inicial del nuevo insumo.')->nullable(),
+            'vendible_directo' => $schema->boolean()->description('true si este insumo tambien se vende directo como producto unico.')->nullable(),
+            'precio_venta' => $schema->number()->description('Precio de venta para preparar_alta_producto.')->nullable(),
+            'costo_estimado' => $schema->number()->description('Costo estimado para preparar_alta_producto.')->nullable(),
+            'product_type' => $schema->string()->enum(['simple', 'prepared', 'configurable'])->description('Tipo de producto.')->nullable(),
+            'option_group_name' => $schema->string()->description('Grupo inicial si product_type=configurable.')->nullable(),
+            'producto_id' => $schema->integer()->description('Producto a configurar para receta u opciones.')->nullable(),
+            'recipe_items' => $schema->array()
+                ->items($schema->object([
+                    'insumo_id' => $schema->integer()->required(),
+                    'cantidad_requerida' => $schema->number()->required(),
+                ])->withoutAdditionalProperties())
+                ->description('Lineas para preparar_receta_producto.')
+                ->nullable(),
+            'replace' => $schema->boolean()->description('true reemplaza la receta completa.')->nullable(),
+            'group_name' => $schema->string()->description('Nombre del grupo configurable para preparar_opciones_producto.')->nullable(),
+            'required_quantity' => $schema->number()->description('Cantidad requerida en grupo configurable.')->nullable(),
+            'min_quantity' => $schema->number()->description('Minimo en grupo configurable.')->nullable(),
+            'max_quantity' => $schema->number()->description('Maximo en grupo configurable.')->nullable(),
+            'options' => $schema->array()
+                ->items($schema->object([
+                    'inventory_item_id' => $schema->integer()->required(),
+                    'quantity_per_selection' => $schema->number()->required(),
+                    'extra_price' => $schema->number()->nullable(),
+                ])->withoutAdditionalProperties())
+                ->description('Opciones para preparar_opciones_producto.')
+                ->nullable(),
         ];
     }
 }

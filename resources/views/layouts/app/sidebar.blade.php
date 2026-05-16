@@ -41,12 +41,12 @@
         <flux:sidebar sticky collapsible="mobile" class="app-sidebar border-e-0">
             <flux:sidebar.header class="px-4 pb-2 pt-4">
                 <a href="{{ route('dashboard') }}" wire:navigate class="group flex items-center gap-3 rounded-2xl p-2 transition hover:bg-white">
-                    <span class="flex size-11 items-center justify-center rounded-2xl bg-slate-950 text-base font-black tracking-tight text-white shadow-sm shadow-slate-950/20">
-                        GL
+                    <span class="godslove-mark size-11 text-base">
+                        <span>GL</span>
                     </span>
                     <span class="min-w-0">
                         <span class="block truncate text-base font-semibold tracking-tight text-slate-950">{{ config('app.name', 'GodsLove') }}</span>
-                        <span class="block truncate text-xs font-medium uppercase tracking-[0.18em] text-slate-500">Operacion diaria</span>
+                        <span class="block truncate text-xs font-medium uppercase tracking-[0.18em] text-rose-500">Mas frescas, mas ricas</span>
                     </span>
                 </a>
 
@@ -55,7 +55,7 @@
 
             @if ($activeItem)
                 <div class="px-4 pb-4">
-                    <div class="rounded-2xl border border-white bg-white p-4 shadow-sm">
+                    <div class="rounded-2xl border border-rose-100 bg-white p-4 shadow-sm">
                         <div class="flex items-start gap-3">
                             <span class="flex size-10 shrink-0 items-center justify-center rounded-xl text-white {{ $activeItem['accent'] }}">
                                 <flux:icon :icon="$activeItem['icon']" class="size-4" />
@@ -111,13 +111,13 @@
             <flux:spacer />
 
             <div class="px-4 pb-4">
-                <div class="rounded-2xl border border-slate-800 bg-slate-950 p-4 text-white shadow-sm shadow-slate-950/20">
+                <div class="rounded-2xl border border-rose-200 bg-[#fff8f3] p-4 text-slate-950 shadow-sm">
                     <div class="flex items-center justify-between gap-3">
-                        <p class="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-200">Caja viva</p>
-                        <span class="size-2 rounded-full bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.16)]"></span>
+                        <p class="text-xs font-black uppercase tracking-[0.22em] text-rose-500">Caja viva</p>
+                        <span class="size-2 rounded-full bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.16)]"></span>
                     </div>
-                    <p class="mt-2 text-sm leading-5 text-white/80">Vende, descuenta inventario y revisa el cierre sin brincar entre herramientas.</p>
-                    <a href="{{ route('ventas.punto') }}" wire:navigate class="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-white px-3 py-2 text-xs font-semibold text-slate-950 transition hover:bg-emerald-50">
+                    <p class="mt-2 text-sm leading-5 text-slate-600">Vende, descuenta inventario y revisa el cierre con el toque Godslove.</p>
+                    <a href="{{ route('ventas.punto') }}" wire:navigate class="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-rose-500 px-3 py-2 text-xs font-black text-white transition hover:bg-rose-600">
                         Ir a vender
                     </a>
                 </div>
@@ -130,10 +130,10 @@
             <flux:sidebar.toggle class="lg:hidden" icon="bars-2" inset="left" />
 
             <div class="ml-3 flex items-center gap-2">
-                <span class="flex size-9 items-center justify-center rounded-xl bg-slate-950 text-sm font-black text-white">GL</span>
+                <span class="godslove-mark size-9 text-sm"><span>GL</span></span>
                 <div class="min-w-0">
                     <p class="truncate text-sm font-semibold text-slate-950">{{ config('app.name', 'GodsLove') }}</p>
-                    <p class="truncate text-xs text-slate-500">Operacion diaria</p>
+                    <p class="truncate text-xs text-rose-500">Mas frescas, mas ricas</p>
                 </div>
             </div>
 

@@ -2,11 +2,19 @@
 
 namespace App\Services\Mcp;
 
+use App\Models\CategoriaGasto;
+use App\Models\CategoriaInsumo;
 use App\Models\CategoriaProducto;
+use App\Models\Category;
 use App\Models\CorteCaja;
 use App\Models\Insumo;
 use App\Models\InventoryItem;
 use App\Models\Producto;
+use App\Models\ProductoInsumo;
+use App\Models\ProductOptionGroup;
+use App\Models\ProductOptionItem;
+use App\Models\ProductRecipe;
+use App\Models\Unit;
 use App\Models\Venta;
 use App\Services\InventarioService;
 use App\Services\InventoryEntryService;
@@ -17,6 +25,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
 use RuntimeException;
@@ -66,18 +75,50 @@ class OperationsAssistantService
                     'preparar_cerrar_caja con monto contado',
                     'confirmar_cerrar_caja solo si el usuario confirma diferencia',
                 ],
+                'alta_insumo' => [
+                    'Consultar si ya existe con consultar_inventario',
+                    'preparar_alta_insumo con nombre, unidad, stock inicial, minimo y costo',
+                    'confirmar_alta_insumo solo si el usuario confirma el resumen',
+                ],
+                'alta_categoria' => [
+                    'Revisar categorias existentes en operations://catalog-summary o busquedas relacionadas',
+                    'preparar_alta_categoria con tipo producto, insumo o gasto',
+                    'confirmar_alta_categoria solo si el usuario confirma el resumen',
+                ],
+                'alta_producto' => [
+                    'buscar_producto para evitar duplicados',
+                    'preparar_alta_producto con nombre, precio, categoria y tipo',
+                    'si es simple incluir inventory_item_id; si es configurable incluir grupo y requeridas',
+                    'confirmar_alta_producto solo si el usuario confirma el resumen',
+                ],
+                'receta_producto' => [
+                    'buscar_producto y consultar_inventario para obtener IDs validos',
+                    'preparar_receta_producto con producto_id e insumos/cantidades',
+                    'confirmar_receta_producto solo si el usuario confirma costo e ingredientes',
+                ],
+                'opciones_producto' => [
+                    'buscar_producto y consultar_inventario para obtener producto y sabores/opciones',
+                    'preparar_opciones_producto con grupo, reglas y opciones',
+                    'confirmar_opciones_producto solo si el usuario confirma reglas e impacto de inventario',
+                ],
             ],
             'nunca_hacer' => [
                 'No ejecutar SQL libre.',
                 'No confirmar ventas, caja o inventario sin confirmation_token.',
                 'No registrar venta si no hay caja abierta.',
-                'No modificar precios o catalogo desde estas tools de operaciones.',
+                'No dar de alta insumos, categorias o productos duplicados.',
+                'No dar de alta productos sin precio ni tipo; recetas sin cantidades; opciones sin item de inventario.',
             ],
             'ejemplos' => [
                 'Vendi 2 conos dobles en efectivo' => 'buscar_producto, estimar_venta, preparar_venta, confirmar_venta',
                 'Que inventario esta bajo' => 'consultar_inventario',
                 'Abre caja con 500' => 'resumen_caja, preparar_abrir_caja, confirmar_abrir_caja',
                 'Cierra caja con 2730 contado' => 'resumen_caja, preparar_cerrar_caja, confirmar_cerrar_caja',
+                'Da de alta azucar con 10 kg a 24 pesos' => 'consultar_inventario, preparar_alta_insumo, confirmar_alta_insumo',
+                'Crea categoria Paletas premium' => 'preparar_alta_categoria, confirmar_alta_categoria',
+                'Crea producto Malteada chica de 55 pesos' => 'buscar_producto, preparar_alta_producto, confirmar_alta_producto',
+                'Ponle receta a Malteada con 0.2 L de leche' => 'buscar_producto, consultar_inventario, preparar_receta_producto, confirmar_receta_producto',
+                'Agrega sabores vainilla y fresa al cono doble' => 'buscar_producto, consultar_inventario, preparar_opciones_producto, confirmar_opciones_producto',
             ],
         ];
     }
@@ -579,6 +620,648 @@ class OperationsAssistantService
     }
 
     /**
+     * @return array<string, mixed>
+     */
+    public function prepareCreateInsumo(
+        string $name,
+        ?int $categoryId,
+        string $unitName,
+        float $currentStock,
+        float $minimumStock,
+        float $unitCost,
+        bool $isSellable = false,
+    ): array {
+        $name = trim($name);
+        $unitName = trim($unitName);
+
+        $errors = [];
+
+        if ($name === '') {
+            $errors[] = 'El nombre del insumo es obligatorio.';
+        }
+
+        if (mb_strlen($name) > 255) {
+            $errors[] = 'El nombre del insumo no puede tener mas de 255 caracteres.';
+        }
+
+        if ($unitName === '') {
+            $errors[] = 'La unidad de medida es obligatoria.';
+        }
+
+        if ($currentStock < 0) {
+            $errors[] = 'La cantidad actual no puede ser negativa.';
+        }
+
+        if ($minimumStock < 0) {
+            $errors[] = 'La cantidad minima no puede ser negativa.';
+        }
+
+        if ($unitCost < 0) {
+            $errors[] = 'El costo unitario no puede ser negativo.';
+        }
+
+        if ($categoryId !== null && ! CategoriaInsumo::query()->whereKey($categoryId)->where('activo', true)->exists()) {
+            $errors[] = 'La categoria de insumo no existe o esta inactiva.';
+        }
+
+        if (Insumo::query()->where('nombre', $name)->exists()) {
+            $errors[] = "Ya existe un insumo llamado {$name}.";
+        }
+
+        if (InventoryItem::query()->where('name', $name)->exists()) {
+            $errors[] = "Ya existe un item de inventario llamado {$name}.";
+        }
+
+        $unitPreview = $this->normalizeUnitName($unitName);
+
+        $summary = [
+            'nombre' => $name,
+            'categoria_insumo_id' => $categoryId,
+            'categoria' => $categoryId ? CategoriaInsumo::query()->whereKey($categoryId)->value('nombre') : null,
+            'unidad_medida' => $unitPreview['name'],
+            'unidad_abreviatura' => $unitPreview['abbreviation'],
+            'permite_decimales' => $unitPreview['allows_decimals'],
+            'cantidad_actual' => round($currentStock, 3),
+            'cantidad_minima' => round($minimumStock, 3),
+            'costo_unitario' => round($unitCost, 4),
+            'valor_inicial' => round($currentStock * $unitCost, 2),
+            'vendible_directo' => $isSellable,
+        ];
+
+        if ($errors !== []) {
+            return $this->operationBlocked('preparar_alta_insumo', $errors, $summary);
+        }
+
+        return $this->withConfirmationToken('alta_insumo', [
+            'nombre' => $name,
+            'categoria_insumo_id' => $categoryId,
+            'unidad_medida' => $unitPreview['name'],
+            'cantidad_actual' => round($currentStock, 3),
+            'cantidad_minima' => round($minimumStock, 3),
+            'costo_unitario' => round($unitCost, 4),
+            'is_sellable' => $isSellable,
+        ], $summary);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function confirmCreateInsumo(string $token): array
+    {
+        $confirmation = $this->pullConfirmation($token, 'alta_insumo');
+        $payload = $confirmation['payload'];
+
+        if (Insumo::query()->where('nombre', $payload['nombre'])->exists()) {
+            throw new RuntimeException("Ya existe un insumo llamado {$payload['nombre']}.");
+        }
+
+        return DB::transaction(function () use ($payload): array {
+            $unit = $this->unitForName((string) $payload['unidad_medida']);
+            $categoryId = $this->inventoryCategoryIdForInsumo($payload['categoria_insumo_id'] ?? null);
+
+            $insumo = Insumo::query()->create([
+                'categoria_insumo_id' => $payload['categoria_insumo_id'] ?? null,
+                'nombre' => $payload['nombre'],
+                'unidad_medida' => $unit->name,
+                'cantidad_actual' => (float) $payload['cantidad_actual'],
+                'cantidad_minima' => (float) $payload['cantidad_minima'],
+                'costo_unitario' => (float) $payload['costo_unitario'],
+                'activo' => true,
+            ]);
+
+            $inventoryItem = InventoryItem::query()->create([
+                'category_id' => $categoryId,
+                'unit_id' => $unit->id,
+                'name' => $insumo->nombre,
+                'current_stock' => (float) $payload['cantidad_actual'],
+                'minimum_stock' => (float) $payload['cantidad_minima'],
+                'average_cost' => (float) $payload['costo_unitario'],
+                'allows_decimals' => (bool) $unit->allows_decimals,
+                'is_sellable' => (bool) ($payload['is_sellable'] ?? false),
+                'is_consumable' => true,
+                'is_active' => true,
+                'legacy_table' => 'insumos',
+                'legacy_id' => $insumo->id,
+            ]);
+
+            $insumo->update([
+                'inventory_item_id' => $inventoryItem->id,
+            ]);
+
+            return [
+                'status' => 'confirmed',
+                'operacion' => 'alta_insumo',
+                'insumo' => [
+                    'id' => $insumo->id,
+                    'inventory_item_id' => $inventoryItem->id,
+                    'nombre' => $insumo->nombre,
+                    'unidad_medida' => $insumo->unidad_medida,
+                    'cantidad_actual' => (float) $insumo->cantidad_actual,
+                    'cantidad_minima' => (float) $insumo->cantidad_minima,
+                    'costo_unitario' => (float) $insumo->costo_unitario,
+                    'vendible_directo' => (bool) $inventoryItem->is_sellable,
+                ],
+            ];
+        });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function prepareCreateCategory(string $type, string $name, ?string $description = null): array
+    {
+        $type = trim($type);
+        $name = trim($name);
+        $description = filled($description) ? trim((string) $description) : null;
+        $errors = [];
+
+        if (! in_array($type, ['producto', 'insumo', 'gasto'], true)) {
+            $errors[] = 'Tipo de categoria no permitido. Usa producto, insumo o gasto.';
+        }
+
+        if ($name === '') {
+            $errors[] = 'El nombre de la categoria es obligatorio.';
+        }
+
+        if (mb_strlen($name) > 255) {
+            $errors[] = 'El nombre de la categoria no puede tener mas de 255 caracteres.';
+        }
+
+        if ($errors === [] && $this->categoryModelForType($type)::query()->where('nombre', $name)->exists()) {
+            $errors[] = "Ya existe una categoria de {$type} llamada {$name}.";
+        }
+
+        $summary = [
+            'tipo' => $type,
+            'nombre' => $name,
+            'descripcion' => $description,
+            'activo' => true,
+        ];
+
+        if ($errors !== []) {
+            return $this->operationBlocked('preparar_alta_categoria', $errors, $summary);
+        }
+
+        return $this->withConfirmationToken('alta_categoria', $summary, $summary);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function confirmCreateCategory(string $token): array
+    {
+        $confirmation = $this->pullConfirmation($token, 'alta_categoria');
+        $payload = $confirmation['payload'];
+        $modelClass = $this->categoryModelForType($payload['tipo']);
+
+        if ($modelClass::query()->where('nombre', $payload['nombre'])->exists()) {
+            throw new RuntimeException("Ya existe una categoria llamada {$payload['nombre']}.");
+        }
+
+        $category = $modelClass::query()->create([
+            'nombre' => $payload['nombre'],
+            'descripcion' => $payload['descripcion'] ?? null,
+            'activo' => true,
+        ]);
+
+        return [
+            'status' => 'confirmed',
+            'operacion' => 'alta_categoria',
+            'categoria' => [
+                'id' => $category->id,
+                'tipo' => $payload['tipo'],
+                'nombre' => $category->nombre,
+                'descripcion' => $category->descripcion,
+                'activo' => (bool) $category->activo,
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function prepareCreateProduct(
+        string $name,
+        ?int $categoryId,
+        float $price,
+        ?string $description = null,
+        ?float $estimatedCost = null,
+        string $productType = 'prepared',
+        ?int $inventoryItemId = null,
+        ?string $optionGroupName = null,
+        ?float $requiredQuantity = null,
+    ): array {
+        $name = trim($name);
+        $productType = trim($productType);
+        $description = filled($description) ? trim((string) $description) : null;
+        $errors = [];
+
+        if ($name === '') {
+            $errors[] = 'El nombre del producto es obligatorio.';
+        }
+
+        if (mb_strlen($name) > 255) {
+            $errors[] = 'El nombre del producto no puede tener mas de 255 caracteres.';
+        }
+
+        if ($price < 0) {
+            $errors[] = 'El precio de venta no puede ser negativo.';
+        }
+
+        if ($estimatedCost !== null && $estimatedCost < 0) {
+            $errors[] = 'El costo estimado no puede ser negativo.';
+        }
+
+        if (! in_array($productType, ['simple', 'prepared', 'configurable'], true)) {
+            $errors[] = 'Tipo de producto no permitido. Usa simple, prepared o configurable.';
+        }
+
+        if ($categoryId !== null && ! CategoriaProducto::query()->whereKey($categoryId)->where('activo', true)->exists()) {
+            $errors[] = 'La categoria de producto no existe o esta inactiva.';
+        }
+
+        if ($productType === 'simple' && $inventoryItemId === null) {
+            $errors[] = 'El producto simple requiere inventory_item_id.';
+        }
+
+        if ($inventoryItemId !== null && ! InventoryItem::query()->whereKey($inventoryItemId)->where('is_active', true)->exists()) {
+            $errors[] = 'El item de inventario no existe o esta inactivo.';
+        }
+
+        if ($productType === 'configurable' && blank($optionGroupName)) {
+            $errors[] = 'El producto configurable requiere nombre de grupo de opciones.';
+        }
+
+        if ($productType === 'configurable' && ($requiredQuantity ?? 0) <= 0) {
+            $errors[] = 'El producto configurable requiere una cantidad requerida mayor a cero.';
+        }
+
+        if (Producto::query()->where('nombre', $name)->exists()) {
+            $errors[] = "Ya existe un producto llamado {$name}.";
+        }
+
+        $summary = [
+            'nombre' => $name,
+            'categoria_producto_id' => $categoryId,
+            'categoria' => $categoryId ? CategoriaProducto::query()->whereKey($categoryId)->value('nombre') : null,
+            'descripcion' => $description,
+            'precio_venta' => round($price, 2),
+            'costo_estimado' => round((float) ($estimatedCost ?? 0), 2),
+            'tipo' => $productType,
+            'inventory_item_id' => $productType === 'simple' ? $inventoryItemId : null,
+            'grupo_opciones' => $productType === 'configurable' ? trim((string) $optionGroupName) : null,
+            'opciones_requeridas' => $productType === 'configurable' ? round((float) $requiredQuantity, 3) : null,
+        ];
+
+        if ($errors !== []) {
+            return $this->operationBlocked('preparar_alta_producto', $errors, $summary);
+        }
+
+        return $this->withConfirmationToken('alta_producto', [
+            'nombre' => $name,
+            'categoria_producto_id' => $categoryId,
+            'descripcion' => $description,
+            'precio_venta' => round($price, 2),
+            'costo_estimado' => round((float) ($estimatedCost ?? 0), 2),
+            'product_type' => $productType,
+            'inventory_item_id' => $productType === 'simple' ? $inventoryItemId : null,
+            'option_group_name' => $productType === 'configurable' ? trim((string) $optionGroupName) : null,
+            'required_quantity' => $productType === 'configurable' ? round((float) $requiredQuantity, 3) : null,
+        ], $summary);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function confirmCreateProduct(string $token): array
+    {
+        $confirmation = $this->pullConfirmation($token, 'alta_producto');
+        $payload = $confirmation['payload'];
+
+        if (Producto::query()->where('nombre', $payload['nombre'])->exists()) {
+            throw new RuntimeException("Ya existe un producto llamado {$payload['nombre']}.");
+        }
+
+        return DB::transaction(function () use ($payload): array {
+            $product = Producto::query()->create([
+                'categoria_producto_id' => $payload['categoria_producto_id'] ?? null,
+                'nombre' => $payload['nombre'],
+                'descripcion' => $payload['descripcion'] ?? null,
+                'precio_venta' => (float) $payload['precio_venta'],
+                'costo_estimado' => (float) $payload['costo_estimado'],
+                'product_type' => $payload['product_type'],
+                'inventory_item_id' => $payload['product_type'] === 'simple' ? $payload['inventory_item_id'] : null,
+                'activo' => true,
+            ]);
+
+            if ($payload['product_type'] === 'simple') {
+                InventoryItem::query()
+                    ->whereKey($payload['inventory_item_id'])
+                    ->update(['is_sellable' => true]);
+            }
+
+            if ($payload['product_type'] === 'configurable') {
+                $product->productOptionGroups()->create([
+                    'name' => $payload['option_group_name'] ?? 'Sabores',
+                    'required_quantity' => (float) ($payload['required_quantity'] ?? 1),
+                    'min_quantity' => (float) ($payload['required_quantity'] ?? 1),
+                    'max_quantity' => (float) ($payload['required_quantity'] ?? 1),
+                ]);
+            }
+
+            return [
+                'status' => 'confirmed',
+                'operacion' => 'alta_producto',
+                'producto' => $this->productPayload($product->fresh(['categoria', 'inventoryItem.unit', 'productOptionGroups.optionItems.inventoryItem.unit'])),
+            ];
+        });
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array<string, mixed>
+     */
+    public function prepareProductRecipe(int $productId, array $items, bool $replace = true): array
+    {
+        $product = Producto::query()->whereKey($productId)->where('activo', true)->first();
+        $errors = [];
+        $recipe = [];
+        $seen = [];
+        $estimatedCost = 0.0;
+
+        if (! $product instanceof Producto) {
+            $errors[] = 'El producto no existe o esta inactivo.';
+        }
+
+        if ($items === []) {
+            $errors[] = 'La receta debe incluir al menos un insumo.';
+        }
+
+        foreach ($items as $index => $item) {
+            $insumoId = (int) ($item['insumo_id'] ?? 0);
+            $quantity = (float) ($item['cantidad_requerida'] ?? 0);
+            $insumo = Insumo::query()->with('inventoryItem.unit')->whereKey($insumoId)->where('activo', true)->first();
+
+            if (! $insumo instanceof Insumo) {
+                $errors[] = "La linea {$index} no corresponde a un insumo activo.";
+
+                continue;
+            }
+
+            if (isset($seen[$insumo->id])) {
+                $errors[] = "El insumo {$insumo->nombre} esta repetido.";
+            }
+
+            if ($quantity <= 0) {
+                $errors[] = "La cantidad de {$insumo->nombre} debe ser mayor a cero.";
+            }
+
+            $seen[$insumo->id] = true;
+            $lineCost = round($quantity * (float) $insumo->costo_unitario, 2);
+            $estimatedCost += $lineCost;
+
+            $recipe[] = [
+                'insumo_id' => $insumo->id,
+                'inventory_item_id' => $insumo->inventory_item_id,
+                'nombre' => $insumo->nombre,
+                'cantidad_requerida' => round($quantity, 3),
+                'unidad' => $insumo->inventoryItem?->unit?->abbreviation ?? $insumo->unidad_medida,
+                'costo_linea' => $lineCost,
+            ];
+        }
+
+        $summary = [
+            'producto_id' => $productId,
+            'producto' => $product?->nombre,
+            'modo' => $replace ? 'reemplazar_receta' : 'agregar_actualizar_lineas',
+            'receta' => $recipe,
+            'costo_estimado' => round($estimatedCost, 2),
+        ];
+
+        if ($errors !== []) {
+            return $this->operationBlocked('preparar_receta_producto', $errors, $summary);
+        }
+
+        return $this->withConfirmationToken('receta_producto', [
+            'producto_id' => $productId,
+            'items' => collect($recipe)
+                ->map(fn (array $line): array => [
+                    'insumo_id' => $line['insumo_id'],
+                    'inventory_item_id' => $line['inventory_item_id'],
+                    'cantidad_requerida' => $line['cantidad_requerida'],
+                ])
+                ->all(),
+            'replace' => $replace,
+            'costo_estimado' => round($estimatedCost, 2),
+        ], $summary);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function confirmProductRecipe(string $token): array
+    {
+        $confirmation = $this->pullConfirmation($token, 'receta_producto');
+        $payload = $confirmation['payload'];
+
+        return DB::transaction(function () use ($payload): array {
+            $product = Producto::query()->whereKey($payload['producto_id'])->where('activo', true)->firstOrFail();
+
+            if ($payload['replace']) {
+                $product->insumos()->detach();
+                ProductRecipe::query()->where('product_id', $product->id)->delete();
+            }
+
+            foreach ($payload['items'] as $item) {
+                ProductoInsumo::query()->updateOrCreate(
+                    [
+                        'producto_id' => $product->id,
+                        'insumo_id' => $item['insumo_id'],
+                    ],
+                    [
+                        'cantidad_requerida' => (float) $item['cantidad_requerida'],
+                    ],
+                );
+
+                if ($item['inventory_item_id']) {
+                    ProductRecipe::query()->updateOrCreate(
+                        [
+                            'product_id' => $product->id,
+                            'inventory_item_id' => $item['inventory_item_id'],
+                        ],
+                        [
+                            'quantity' => (float) $item['cantidad_requerida'],
+                        ],
+                    );
+                }
+            }
+
+            $product->update([
+                'product_type' => $product->product_type === 'configurable' ? 'configurable' : 'prepared',
+                'costo_estimado' => (float) $payload['costo_estimado'],
+            ]);
+
+            return [
+                'status' => 'confirmed',
+                'operacion' => 'receta_producto',
+                'producto' => $this->productPayload($product->fresh(['categoria', 'inventoryItem.unit', 'productRecipes.inventoryItem.unit', 'productOptionGroups.optionItems.inventoryItem.unit'])),
+            ];
+        });
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $options
+     * @return array<string, mixed>
+     */
+    public function prepareProductOptions(
+        int $productId,
+        string $groupName,
+        float $requiredQuantity,
+        ?float $minQuantity,
+        ?float $maxQuantity,
+        array $options,
+    ): array {
+        $product = Producto::query()->whereKey($productId)->where('activo', true)->first();
+        $groupName = trim($groupName);
+        $minQuantity ??= $requiredQuantity;
+        $maxQuantity ??= $requiredQuantity;
+        $errors = [];
+        $optionSummary = [];
+        $seen = [];
+
+        if (! $product instanceof Producto) {
+            $errors[] = 'El producto no existe o esta inactivo.';
+        }
+
+        if ($groupName === '') {
+            $errors[] = 'El nombre del grupo de opciones es obligatorio.';
+        }
+
+        if ($requiredQuantity <= 0 || $minQuantity < 0 || $maxQuantity <= 0 || $minQuantity > $requiredQuantity || $requiredQuantity > $maxQuantity) {
+            $errors[] = 'Las reglas del grupo deben cumplir minimo <= requeridas <= maximo y ser mayores a cero.';
+        }
+
+        if ($options === []) {
+            $errors[] = 'Debes incluir al menos una opcion.';
+        }
+
+        foreach ($options as $index => $option) {
+            $inventoryItemId = (int) ($option['inventory_item_id'] ?? 0);
+            $quantity = (float) ($option['quantity_per_selection'] ?? 0);
+            $extraPrice = array_key_exists('extra_price', $option) ? (float) $option['extra_price'] : null;
+            $inventoryItem = InventoryItem::query()->with('unit')->whereKey($inventoryItemId)->where('is_active', true)->first();
+
+            if (! $inventoryItem instanceof InventoryItem) {
+                $errors[] = "La opcion {$index} no corresponde a un item de inventario activo.";
+
+                continue;
+            }
+
+            if (isset($seen[$inventoryItem->id])) {
+                $errors[] = "La opcion {$inventoryItem->name} esta repetida.";
+            }
+
+            if ($quantity <= 0) {
+                $errors[] = "La cantidad por seleccion de {$inventoryItem->name} debe ser mayor a cero.";
+            }
+
+            if ($extraPrice !== null && $extraPrice < 0) {
+                $errors[] = "El precio extra de {$inventoryItem->name} no puede ser negativo.";
+            }
+
+            $seen[$inventoryItem->id] = true;
+            $optionSummary[] = [
+                'inventory_item_id' => $inventoryItem->id,
+                'nombre' => $inventoryItem->name,
+                'cantidad_por_seleccion' => round($quantity, 3),
+                'unidad' => $inventoryItem->unit?->abbreviation ?? $inventoryItem->unit?->name,
+                'precio_extra' => $extraPrice !== null ? round($extraPrice, 2) : null,
+            ];
+        }
+
+        $summary = [
+            'producto_id' => $productId,
+            'producto' => $product?->nombre,
+            'grupo' => [
+                'nombre' => $groupName,
+                'requeridas' => round($requiredQuantity, 3),
+                'minimo' => round($minQuantity, 3),
+                'maximo' => round($maxQuantity, 3),
+            ],
+            'opciones' => $optionSummary,
+        ];
+
+        if ($errors !== []) {
+            return $this->operationBlocked('preparar_opciones_producto', $errors, $summary);
+        }
+
+        return $this->withConfirmationToken('opciones_producto', [
+            'producto_id' => $productId,
+            'group_name' => $groupName,
+            'required_quantity' => round($requiredQuantity, 3),
+            'min_quantity' => round($minQuantity, 3),
+            'max_quantity' => round($maxQuantity, 3),
+            'options' => collect($optionSummary)
+                ->map(fn (array $option): array => [
+                    'inventory_item_id' => $option['inventory_item_id'],
+                    'quantity_per_selection' => $option['cantidad_por_seleccion'],
+                    'extra_price' => $option['precio_extra'],
+                ])
+                ->all(),
+        ], $summary);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function confirmProductOptions(string $token): array
+    {
+        $confirmation = $this->pullConfirmation($token, 'opciones_producto');
+        $payload = $confirmation['payload'];
+
+        return DB::transaction(function () use ($payload): array {
+            $product = Producto::query()->whereKey($payload['producto_id'])->where('activo', true)->firstOrFail();
+
+            $group = ProductOptionGroup::query()->updateOrCreate(
+                [
+                    'product_id' => $product->id,
+                    'name' => $payload['group_name'],
+                ],
+                [
+                    'required_quantity' => (float) $payload['required_quantity'],
+                    'min_quantity' => (float) $payload['min_quantity'],
+                    'max_quantity' => (float) $payload['max_quantity'],
+                ],
+            );
+
+            foreach ($payload['options'] as $option) {
+                ProductOptionItem::query()->updateOrCreate(
+                    [
+                        'product_option_group_id' => $group->id,
+                        'inventory_item_id' => $option['inventory_item_id'],
+                    ],
+                    [
+                        'quantity_per_selection' => (float) $option['quantity_per_selection'],
+                        'extra_price' => $option['extra_price'] !== null ? (float) $option['extra_price'] : null,
+                        'is_active' => true,
+                    ],
+                );
+            }
+
+            $product->update([
+                'product_type' => 'configurable',
+                'inventory_item_id' => null,
+            ]);
+
+            return [
+                'status' => 'confirmed',
+                'operacion' => 'opciones_producto',
+                'producto' => $this->productPayload($product->fresh(['categoria', 'inventoryItem.unit', 'productRecipes.inventoryItem.unit', 'productOptionGroups.optionItems.inventoryItem.unit'])),
+            ];
+        });
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $summary
      * @return array<string, mixed>
@@ -696,6 +1379,86 @@ class OperationsAssistantService
     {
         return (float) $item->minimum_stock > 0
             && (float) $item->current_stock <= (float) $item->minimum_stock;
+    }
+
+    /**
+     * @return array{name: string, abbreviation: string, allows_decimals: bool}
+     */
+    private function normalizeUnitName(string $unitName): array
+    {
+        $normalized = match (mb_strtolower(trim($unitName))) {
+            'kg', 'kilo', 'kilogramo' => 'kilogramo',
+            'g', 'gr', 'gramo' => 'gramo',
+            'l', 'lt', 'litro' => 'litro',
+            'ml', 'mililitro' => 'mililitro',
+            'pz', 'pieza' => 'pieza',
+            default => mb_strtolower(trim($unitName)),
+        };
+
+        $abbreviation = match ($normalized) {
+            'kilogramo' => 'kg',
+            'gramo' => 'g',
+            'litro' => 'L',
+            'mililitro' => 'ml',
+            'pieza' => 'pz',
+            default => $normalized,
+        };
+
+        return [
+            'name' => $normalized,
+            'abbreviation' => $abbreviation,
+            'allows_decimals' => in_array($normalized, ['litro', 'mililitro', 'kilogramo', 'gramo'], true),
+        ];
+    }
+
+    private function unitForName(string $unitName): Unit
+    {
+        $unit = $this->normalizeUnitName($unitName);
+
+        return Unit::query()->firstOrCreate(
+            ['name' => $unit['name']],
+            [
+                'abbreviation' => $unit['abbreviation'],
+                'allows_decimals' => $unit['allows_decimals'],
+            ],
+        );
+    }
+
+    private function inventoryCategoryIdForInsumo(?int $categoriaInsumoId): ?int
+    {
+        if ($categoriaInsumoId !== null) {
+            $legacyCategory = Category::query()
+                ->where('legacy_table', 'categoria_insumos')
+                ->where('legacy_id', $categoriaInsumoId)
+                ->value('id');
+
+            if ($legacyCategory) {
+                return (int) $legacyCategory;
+            }
+        }
+
+        return Category::query()->firstOrCreate(
+            [
+                'type' => 'inventory_item',
+                'name' => 'Inventario',
+            ],
+            [
+                'is_active' => true,
+            ],
+        )->id;
+    }
+
+    /**
+     * @return class-string<CategoriaProducto|CategoriaInsumo|CategoriaGasto>
+     */
+    private function categoryModelForType(string $type): string
+    {
+        return match ($type) {
+            'producto' => CategoriaProducto::class,
+            'insumo' => CategoriaInsumo::class,
+            'gasto' => CategoriaGasto::class,
+            default => throw new InvalidArgumentException('Tipo de categoria no permitido.'),
+        };
     }
 
     /**

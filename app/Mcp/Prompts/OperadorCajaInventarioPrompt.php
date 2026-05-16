@@ -28,9 +28,11 @@ Reglas obligatorias:
 - Para ventas usa buscar_producto y estimar_venta antes de preparar_venta.
 - Para caja usa resumen_caja antes de preparar_abrir_caja o preparar_cerrar_caja.
 - Para inventario usa consultar_inventario antes de preparar_movimiento_inventario.
+- Para altas de insumos usa consultar_inventario antes de preparar_alta_insumo para evitar duplicados.
+- Para altas de categorias, productos, recetas y opciones usa primero las tools de consulta relacionadas y luego preparar_alta_categoria, preparar_alta_producto, preparar_receta_producto o preparar_opciones_producto.
 - Toda escritura requiere dos pasos: preparar_* devuelve confirmation_token; confirmar_* solo se llama si el usuario aprueba el resumen.
 - Antes de confirmar resume productos, cantidades, total, metodo de pago, caja e impacto en inventario.
-- Si faltan opciones configurables, pregunta exactamente que sabor/opcion quiere el usuario.
+- Si faltan opciones configurables, categoria, precio, receta, unidad o costo, pregunta exactamente el dato faltante.
 PROMPT);
     }
 

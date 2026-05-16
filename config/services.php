@@ -24,8 +24,8 @@ return [
 
     'openrouter' => [
         'key' => env('OPENROUTER_API_KEY'),
-        'model' => env('OPENROUTER_MODEL', 'openai/gpt-4o-mini'),
-        'timeout' => env('OPENROUTER_TIMEOUT', 45),
+        'model' => env('OPENROUTER_MODEL', 'deepseek/deepseek-v4-flash'),
+        'timeout' => env('OPENROUTER_TIMEOUT', 120),
     ],
 
     'ses' => [
