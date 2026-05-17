@@ -423,6 +423,27 @@ test('assistant keeps an incomplete configurable sale and completes it with the 
     IntentParserAgent::fake([
         $saleIntent,
         $saleIntent,
+        [
+            ...$saleIntent,
+            'items' => [
+                [
+                    'producto_nombre' => 'Cono sencillo',
+                    'cantidad' => 1,
+                    'selected_options' => [],
+                ],
+            ],
+        ],
+        [
+            ...$saleIntent,
+            'items' => [
+                [
+                    'producto_nombre' => 'Cono sencillo',
+                    'cantidad' => 1,
+                    'selected_options' => [],
+                ],
+            ],
+            'missing_fields' => ['sabor del cono'],
+        ],
     ])->preventStrayPrompts();
     OperationsAgent::fake([])->preventStrayPrompts();
 
@@ -537,6 +558,21 @@ test('assistant keeps an incomplete configurable sale and completes it with the 
     expect($confirmed['reply'])->toContain('Venta confirmada')
         ->and($confirmed['pending_confirmations'])->toBe([])
         ->and(Venta::query()->count())->toBe(1);
+
+    $initialFlavor = $assistant->respond([
+        ['role' => 'user', 'content' => 'registra una venta de 1 cono sencillo de nuez en efectivo'],
+    ], $user);
+
+    expect($initialFlavor['reply'])->toContain('Venta preparada')
+        ->and($initialFlavor['pending_confirmations'][0]['operation'])->toBe('venta')
+        ->and(data_get($initialFlavor, 'tool_results.0.result.resumen.impacto_inventario.0.nombre'))->toBe('Nuez');
+
+    $missingFlavor = $assistant->respond([
+        ['role' => 'user', 'content' => 'registra una venta de 1 cono sencillo en efectivo, no se el sabor'],
+    ], $user);
+
+    expect($missingFlavor['reply'])->toContain('venta en borrador')
+        ->and($missingFlavor['pending_confirmations'][0]['operation'])->toBe('venta_incompleta');
 
     IntentParserAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'registra una venta'));
     OperationsAgent::assertNeverPrompted();

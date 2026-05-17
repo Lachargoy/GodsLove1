@@ -454,7 +454,7 @@ PROMPT;
             ->map(fn (array $item): array => [
                 'producto_nombre' => trim((string) ($item['producto_nombre'] ?? '')),
                 'cantidad' => is_numeric($item['cantidad'] ?? null) ? (float) $item['cantidad'] : null,
-                'selected_options' => is_array($item['selected_options'] ?? null) ? $item['selected_options'] : [],
+                'selected_options' => [],
             ])
             ->filter(fn (array $item): bool => $item['producto_nombre'] !== '' || $item['cantidad'] !== null)
             ->values()
@@ -730,6 +730,12 @@ PROMPT;
         $items = $intent['items'] ?? [];
 
         if ($missingFields !== [] || $items === []) {
+            if ($items !== [] && $this->missingOnlyConfigurableFields($missingFields)) {
+                $intent['missing_fields'] = [];
+
+                return $this->prepareSaleFromIntent($messages, $intent);
+            }
+
             return $this->directReply(
                 $messages,
                 $this->missingSaleFieldsReply($missingFields, $items),
@@ -773,6 +779,7 @@ PROMPT;
         }
 
         $paymentMethod = $intent['metodo_pago'] === 'desconocido' ? 'efectivo' : (string) $intent['metodo_pago'];
+        $saleItems = $this->saleItemsWithOptionsFromPrompt($saleItems, $this->lastUserPrompt($messages)) ?? $saleItems;
         $result = $this->operations->prepareSale($saleItems, 0, $paymentMethod);
 
         $toolResults = [[
@@ -806,6 +813,39 @@ PROMPT;
             $toolResults,
             [],
         );
+    }
+
+    /**
+     * @param  array<int, string>  $missingFields
+     */
+    private function missingOnlyConfigurableFields(array $missingFields): bool
+    {
+        if ($missingFields === []) {
+            return false;
+        }
+
+        return collect($missingFields)
+            ->every(function (string $field): bool {
+                $normalized = $this->normalizeText($field);
+
+                return str_contains($normalized, 'sabor')
+                    || str_contains($normalized, 'opcion')
+                    || str_contains($normalized, 'configuracion');
+            });
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $messages
+     */
+    private function lastUserPrompt(array $messages): string
+    {
+        for ($index = count($messages) - 1; $index >= 0; $index--) {
+            if (($messages[$index]['role'] ?? null) === 'user') {
+                return (string) ($messages[$index]['content'] ?? '');
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -1016,7 +1056,7 @@ PROMPT;
 
                     $matches = $group->optionItems
                         ->where('is_active', true)
-                        ->filter(fn (ProductOptionItem $option): bool => $this->optionMatchesPrompt($option, $prompt))
+                        ->filter(fn (ProductOptionItem $option): bool => $this->optionMatchesPrompt($option, $prompt, $product))
                         ->values();
 
                     if ($matches->isEmpty()) {
@@ -1054,15 +1094,22 @@ PROMPT;
         return $matchedAnyOption ? $items : null;
     }
 
-    private function optionMatchesPrompt(ProductOptionItem $option, string $prompt): bool
+    private function optionMatchesPrompt(ProductOptionItem $option, string $prompt, Producto $product): bool
     {
         $inventoryName = $this->normalizeText((string) $option->inventoryItem?->name);
         $promptTokens = collect(explode(' ', $this->normalizeText($prompt)))
             ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
             ->map(fn (string $token): string => $this->singularToken($token))
             ->values();
+        $productTokens = collect(explode(' ', $this->normalizeText($product->nombre)))
+            ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
+            ->map(fn (string $token): string => $this->singularToken($token))
+            ->values();
+        $optionPromptTokens = $promptTokens
+            ->reject(fn (string $token): bool => $productTokens->contains($token))
+            ->values();
 
-        if ($inventoryName === '' || $promptTokens->isEmpty()) {
+        if ($inventoryName === '' || $optionPromptTokens->isEmpty()) {
             return false;
         }
 
@@ -1072,7 +1119,7 @@ PROMPT;
             ->values();
 
         return $optionTokens
-            ->contains(fn (string $token): bool => $promptTokens->contains($token));
+            ->contains(fn (string $token): bool => $optionPromptTokens->contains($token));
     }
 
     /**
