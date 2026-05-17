@@ -920,8 +920,9 @@ PROMPT;
             ->implode("\n");
 
         $missing = $this->missingOptionsText($pending);
+        $availableOptions = $this->availableMissingOptionsText($pending);
 
-        return "Ya tengo la venta en borrador, sin guardar todavia:\n\n{$lines}\nMetodo: ".($pending['payment_method'] ?? 'efectivo')."\n\nMe falta {$missing}. Dime algo como `los 2 de nuez` o `uno de fresa y uno de vainilla`.";
+        return "Ya tengo la venta en borrador, sin guardar todavia:\n\n{$lines}\nMetodo: ".($pending['payment_method'] ?? 'efectivo')."\n\nMe falta {$missing}.{$availableOptions}\n\nElige de la lista, por ejemplo: `los 2 de nuez` o `uno de fresa y uno de vainilla`.";
     }
 
     /**
@@ -956,6 +957,59 @@ PROMPT;
             ->implode(', ');
 
         return $groups !== '' ? $groups : 'las opciones del producto';
+    }
+
+    /**
+     * @param  array<string, mixed>  $pending
+     */
+    private function availableMissingOptionsText(array $pending): string
+    {
+        $groups = collect($pending['items'] ?? [])
+            ->flatMap(function (array $item): array {
+                $product = Producto::query()
+                    ->with('productOptionGroups.optionItems.inventoryItem')
+                    ->find($item['producto_id'] ?? null);
+
+                if (! $product instanceof Producto) {
+                    return [];
+                }
+
+                $selectedOptions = $item['selected_options'] ?? [];
+
+                return $product->productOptionGroups
+                    ->filter(function ($group) use ($selectedOptions): bool {
+                        $selectedQuantity = array_sum(array_map('floatval', $selectedOptions[$group->id] ?? []));
+                        $minQuantity = (float) ($group->min_quantity ?? $group->required_quantity);
+
+                        return round($selectedQuantity, 3) < round($minQuantity, 3);
+                    })
+                    ->map(function ($group) use ($product): array {
+                        return [
+                            'producto' => $product->nombre,
+                            'grupo' => $group->name,
+                            'opciones' => $group->optionItems
+                                ->where('is_active', true)
+                                ->map(fn (ProductOptionItem $option): ?string => $option->inventoryItem?->name)
+                                ->filter()
+                                ->unique()
+                                ->values()
+                                ->all(),
+                        ];
+                    })
+                    ->all();
+            })
+            ->filter(fn (array $group): bool => ($group['opciones'] ?? []) !== [])
+            ->values();
+
+        if ($groups->isEmpty()) {
+            return '';
+        }
+
+        $options = $groups
+            ->map(fn (array $group): string => '- '.$group['producto'].' / '.$group['grupo'].': '.implode(', ', $group['opciones']))
+            ->implode("\n");
+
+        return "\n\nOpciones disponibles:\n{$options}";
     }
 
     /**

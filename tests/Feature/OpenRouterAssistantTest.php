@@ -487,6 +487,19 @@ test('assistant keeps an incomplete configurable sale and completes it with the 
         'is_active' => true,
     ]);
 
+    $fresa = InventoryItem::query()->create([
+        'category_id' => $category->id,
+        'unit_id' => $unit->id,
+        'name' => 'Fresa',
+        'current_stock' => 10,
+        'minimum_stock' => 1,
+        'average_cost' => 25,
+        'allows_decimals' => true,
+        'is_sellable' => false,
+        'is_consumable' => true,
+        'is_active' => true,
+    ]);
+
     $product = Producto::query()->create([
         'categoria_producto_id' => $legacyCategory->id,
         'nombre' => 'Cono sencillo',
@@ -513,6 +526,14 @@ test('assistant keeps an incomplete configurable sale and completes it with the 
         'is_active' => true,
     ]);
 
+    ProductOptionItem::query()->create([
+        'product_option_group_id' => $group->id,
+        'inventory_item_id' => $fresa->id,
+        'quantity_per_selection' => 0.12,
+        'extra_price' => 0,
+        'is_active' => true,
+    ]);
+
     $assistant = app(OpenRouterAssistantService::class);
     $firstResponse = $assistant->respond([
         ['role' => 'user', 'content' => 'registra una venta de 2 conos sencillos en efectivo'],
@@ -520,6 +541,9 @@ test('assistant keeps an incomplete configurable sale and completes it with the 
 
     expect($firstResponse['reply'])->toContain('venta en borrador')
         ->and($firstResponse['reply'])->toContain('Sabores')
+        ->and($firstResponse['reply'])->toContain('Opciones disponibles')
+        ->and($firstResponse['reply'])->toContain('Nuez')
+        ->and($firstResponse['reply'])->toContain('Fresa')
         ->and($firstResponse['pending_confirmations'][0]['operation'])->toBe('venta_incompleta')
         ->and(Venta::query()->count())->toBe(0);
 
