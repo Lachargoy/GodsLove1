@@ -190,6 +190,50 @@
 
         {{ $slot }}
 
+        @php
+            $godsloveFlashMessage = session('success') ?: session('error');
+            $godsloveFlashType = session('error') ? 'error' : 'success';
+        @endphp
+
+        @if ($godsloveFlashMessage)
+            <div
+                class="godslove-toast"
+                x-data="{ show: true }"
+                x-init="setTimeout(() => show = false, 5200)"
+                x-show="show"
+                x-transition.opacity.duration.200ms
+            >
+                <div class="flex gap-3">
+                    <div @class([
+                        'godslove-toast-mark',
+                        'bg-emerald-500' => $godsloveFlashType === 'success',
+                        'bg-rose-500' => $godsloveFlashType === 'error',
+                    ])>
+                        {{ $godsloveFlashType === 'success' ? 'OK' : '!' }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-sm font-black text-slate-950">
+                            {{ $godsloveFlashType === 'success' ? 'Listo, quedo guardado' : 'Necesito revisar algo' }}
+                        </p>
+                        <p class="mt-1 text-sm leading-5 text-slate-600">{{ $godsloveFlashMessage }}</p>
+                    </div>
+                    <button type="button" class="flex size-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-rose-50 hover:text-rose-600" @click="show = false">
+                        x
+                    </button>
+                </div>
+            </div>
+        @endif
+
+        @unless (request()->routeIs('asistente.*'))
+            <a href="{{ route('asistente.index') }}" wire:navigate class="godslove-assistant-fab" aria-label="Abrir asistente GodsLove">
+                <span class="godslove-berry"><span>AI</span></span>
+                <span class="hidden pr-2 sm:block">
+                    <span class="block text-xs font-black uppercase tracking-[0.18em] text-rose-500">Fresa de bombon</span>
+                    <span class="block text-sm font-black text-slate-950">Asistente GodsLove</span>
+                </span>
+            </a>
+        @endunless
+
         @persist('toast')
             <flux:toast.group>
                 <flux:toast />

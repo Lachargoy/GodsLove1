@@ -190,6 +190,36 @@
     .godslove-ribbon {
         @apply rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-rose-700;
     }
+
+    .godslove-toast {
+        @apply fixed right-4 top-4 z-50 w-[min(92vw,360px)] overflow-hidden rounded-[1.35rem] border border-white/80 bg-white/95 p-4 shadow-xl shadow-rose-950/10 ring-1 ring-rose-100 backdrop-blur;
+    }
+
+    .godslove-toast-mark {
+        @apply flex size-10 shrink-0 items-center justify-center rounded-2xl text-xs font-black text-white shadow-sm;
+    }
+
+    .godslove-assistant-fab {
+        @apply fixed bottom-5 right-5 z-40 flex items-center gap-3 rounded-full border border-white/80 bg-white/92 px-3 py-3 text-left shadow-xl shadow-rose-950/12 ring-1 ring-rose-100 backdrop-blur transition hover:-translate-y-1 hover:bg-white hover:shadow-2xl;
+    }
+
+    .godslove-berry {
+        @apply relative flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-[1.55rem] bg-rose-500 text-sm font-black text-white shadow-sm shadow-rose-900/25;
+    }
+
+    .godslove-berry::before {
+        content: '';
+        @apply absolute inset-x-3 top-1 h-2 rounded-full bg-emerald-400;
+    }
+
+    .godslove-berry::after {
+        content: '';
+        @apply absolute bottom-1.5 right-2 size-3 rounded-full bg-rose-200/80;
+    }
+
+    .godslove-berry span {
+        @apply relative z-10 mt-1;
+    }
 }
 
 @keyframes app-page-enter {

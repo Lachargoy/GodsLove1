@@ -21,4 +21,6 @@ test('authenticated users can visit the dashboard', function () {
     $response->assertSee('GodsLove operativo');
     $response->assertSee('Inventario bajo');
     $response->assertSee('Ultimas ventas');
+    $response->assertSee('Fresa de bombon');
+    $response->assertSee('Asistente GodsLove');
 });
