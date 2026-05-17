@@ -424,9 +424,9 @@ new class extends Component
                                     <span @class([
                                         'rounded-full px-2 py-1 text-xs font-black',
                                         'bg-emerald-100 text-emerald-800' => ($step['estado'] ?? '') === 'completed',
-                                        'bg-amber-100 text-amber-800' => ($step['estado'] ?? '') === 'waiting_confirmation',
+                                        'bg-amber-100 text-amber-800' => in_array(($step['estado'] ?? ''), ['waiting_confirmation', 'waiting_input'], true),
                                         'bg-rose-100 text-rose-800' => ($step['estado'] ?? '') === 'blocked',
-                                        'bg-slate-200 text-slate-700' => ! in_array(($step['estado'] ?? ''), ['completed', 'waiting_confirmation', 'blocked'], true),
+                                        'bg-slate-200 text-slate-700' => ! in_array(($step['estado'] ?? ''), ['completed', 'waiting_confirmation', 'waiting_input', 'blocked'], true),
                                     ])>{{ $step['estado'] ?? 'running' }}</span>
                                 </div>
                                 <p class="mt-2 line-clamp-4 text-xs leading-5 text-slate-600">{{ $step['resumen'] ?? '' }}</p>

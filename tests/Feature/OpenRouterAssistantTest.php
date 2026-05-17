@@ -344,7 +344,23 @@ test('assistant prepares straightforward sales without relying on the model', fu
         ProductoInsumoSeeder::class,
     ]);
 
+    $saleIntent = [
+        'intent' => 'registrar_venta',
+        'confidence' => 0.95,
+        'items' => [
+            [
+                'producto_nombre' => 'Cono sencillo',
+                'cantidad' => 2,
+                'selected_options' => [],
+            ],
+        ],
+        'metodo_pago' => 'efectivo',
+        'missing_fields' => [],
+        'notes' => null,
+    ];
+
     IntentParserAgent::fake([
+        $saleIntent,
         [
             'intent' => 'registrar_venta',
             'confidence' => 0.95,
@@ -389,21 +405,24 @@ test('assistant prepares straightforward sales without relying on the model', fu
 });
 
 test('assistant keeps an incomplete configurable sale and completes it with the next flavor message', function () {
-    IntentParserAgent::fake([
-        [
-            'intent' => 'registrar_venta',
-            'confidence' => 0.95,
-            'items' => [
-                [
-                    'producto_nombre' => 'Cono sencillo',
-                    'cantidad' => 2,
-                    'selected_options' => [],
-                ],
+    $saleIntent = [
+        'intent' => 'registrar_venta',
+        'confidence' => 0.95,
+        'items' => [
+            [
+                'producto_nombre' => 'Cono sencillo',
+                'cantidad' => 2,
+                'selected_options' => [],
             ],
-            'metodo_pago' => 'efectivo',
-            'missing_fields' => [],
-            'notes' => null,
         ],
+        'metodo_pago' => 'efectivo',
+        'missing_fields' => [],
+        'notes' => null,
+    ];
+
+    IntentParserAgent::fake([
+        $saleIntent,
+        $saleIntent,
     ])->preventStrayPrompts();
     OperationsAgent::fake([])->preventStrayPrompts();
 
@@ -482,6 +501,22 @@ test('assistant keeps an incomplete configurable sale and completes it with the 
         ->and($firstResponse['reply'])->toContain('Sabores')
         ->and($firstResponse['pending_confirmations'][0]['operation'])->toBe('venta_incompleta')
         ->and(Venta::query()->count())->toBe(0);
+
+    $canceled = $assistant->respond([
+        ...$firstResponse['messages'],
+        ['role' => 'user', 'content' => 'cancelar'],
+    ], $user, $firstResponse['pending_confirmations']);
+
+    expect($canceled['reply'])->toContain('cancele')
+        ->and($canceled['pending_confirmations'])->toBe([]);
+
+    $loopResponse = $assistant->planAndExecute([
+        ['role' => 'user', 'content' => 'registra una venta de 2 conos sencillos en efectivo'],
+    ], $user);
+
+    expect($loopResponse['lastLoopSteps'] ?? $loopResponse['loop_steps'])->not->toBeEmpty()
+        ->and($loopResponse['loop_steps'][0]['estado'])->toBe('waiting_input')
+        ->and($loopResponse['pending_confirmations'][0]['operation'])->toBe('venta_incompleta');
 
     $secondResponse = $assistant->respond([
         ...$firstResponse['messages'],

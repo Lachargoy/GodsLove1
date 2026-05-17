@@ -155,7 +155,7 @@ class OpenRouterAssistantService
                     ...$result,
                     'loop_steps' => [[
                         'tipo' => 'sale_flow',
-                        'estado' => data_get($result, 'tool_results.0.result.status') === 'requires_confirmation' ? 'waiting_confirmation' : 'blocked',
+                        'estado' => $this->saleFlowLoopStatus($result),
                         'resumen' => $result['reply'],
                         'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
                     ]],
@@ -201,7 +201,7 @@ class OpenRouterAssistantService
                 ...$result,
                 'loop_steps' => [[
                     'tipo' => 'sale_flow',
-                    'estado' => data_get($result, 'tool_results.0.result.status') === 'requires_confirmation' ? 'waiting_confirmation' : 'blocked',
+                    'estado' => $this->saleFlowLoopStatus($result),
                     'resumen' => $result['reply'],
                     'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
                 ]],
@@ -811,6 +811,22 @@ PROMPT;
     /**
      * @param  array<string, mixed>  $result
      */
+    private function saleFlowLoopStatus(array $result): string
+    {
+        if (data_get($result, 'tool_results.0.result.status') === 'requires_confirmation') {
+            return 'waiting_confirmation';
+        }
+
+        if ($this->hasIncompleteSale($result['pending_confirmations'] ?? [])) {
+            return 'waiting_input';
+        }
+
+        return 'blocked';
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
     private function isMissingConfigurableOptions(array $result): bool
     {
         if (($result['status'] ?? null) !== 'blocked') {
@@ -1265,7 +1281,7 @@ PROMPT;
     {
         $normalized = $this->normalizeText($message);
 
-        return preg_match('/\b(no|cancela|cancelalo|cancelala|deten|espera|no confirmo)\b/', $normalized) === 1;
+        return preg_match('/\b(no|cancelar|cancela|cancelalo|cancelala|descarta|descartalo|descartala|deten|espera|no confirmo)\b/', $normalized) === 1;
     }
 
     /**
