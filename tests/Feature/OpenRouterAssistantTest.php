@@ -99,6 +99,39 @@ test('openrouter assistant uses laravel ai agent', function () {
     OperationsAgent::assertPrompted('Dame el resumen de caja');
 });
 
+test('assistant does not force vague follow ups into the sale flow', function () {
+    IntentParserAgent::fake([
+        [
+            'intent' => 'registrar_venta',
+            'confidence' => 0.72,
+            'items' => [],
+            'metodo_pago' => 'desconocido',
+            'missing_fields' => ['producto_nombre', 'cantidad', 'metodo_pago'],
+            'notes' => 'misclassified_follow_up',
+        ],
+    ])->preventStrayPrompts();
+
+    OperationsAgent::fake([
+        'Perfecto, seguimos con la categoria de insumos. Para crearla necesito el nombre y una descripcion opcional.',
+    ])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+    $assistant = app(OpenRouterAssistantService::class);
+
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'quiero que des de alta categoria de insumos'],
+        ['role' => 'assistant', 'content' => 'Dime el nombre de la categoria y descripcion opcional.'],
+        ['role' => 'user', 'content' => 'solo es de prueba inventatelo tu'],
+    ], $user);
+
+    expect($response['reply'])->toContain('categoria de insumos')
+        ->and($response['reply'])->not->toContain('No puedo preparar la venta')
+        ->and($response['tool_results'])->toBe([])
+        ->and($response['pending_confirmations'])->toBe([]);
+
+    OperationsAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'solo es de prueba inventatelo tu'));
+});
+
 test('openrouter timeout uses configured two minute value', function () {
     config(['services.openrouter.timeout' => 120]);
 

@@ -80,7 +80,7 @@ class OpenRouterAssistantService
             return $this->pendingOperationBlock($visibleHistory, $pendingConfirmations);
         }
 
-        if (($intent['intent'] ?? null) === 'registrar_venta') {
+        if (($intent['intent'] ?? null) === 'registrar_venta' && $this->looksLikeSaleText($prompt)) {
             return $this->prepareSaleFromIntent($visibleHistory, $intent);
         }
 
@@ -194,7 +194,7 @@ class OpenRouterAssistantService
             ];
         }
 
-        if (($intent['intent'] ?? null) === 'registrar_venta') {
+        if (($intent['intent'] ?? null) === 'registrar_venta' && $this->looksLikeSaleText($goal)) {
             $result = $this->prepareSaleFromIntent($visibleHistory, $intent);
 
             return [
@@ -410,6 +410,9 @@ Mensaje del usuario:
 {$prompt}
 
 Clasifica y extrae la intencion. Si es venta, devuelve producto_nombre, cantidad y metodo_pago. Si faltan datos, usa missing_fields.
+Solo clasifica como registrar_venta cuando el mensaje actual habla claramente de vender, venta, cobrar, ticket, pago, efectivo, tarjeta o transferencia.
+Si el mensaje es una respuesta corta de seguimiento, una categoria, una descripcion, una correccion vaga o contiene "prueba" sin lenguaje de venta, usa otra.
+No conviertas altas de categorias, insumos, productos, recetas u opciones en ventas.
 PROMPT;
     }
 
@@ -1404,6 +1407,17 @@ PROMPT;
         $normalized = $this->normalizeText($message);
 
         return preg_match('/\b(vendi|vendio|venta|registra|registrar|cobra|cobrar|abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar)\b/', $normalized) === 1;
+    }
+
+    private function looksLikeSaleText(string $message): bool
+    {
+        $normalized = $this->normalizeText($message);
+
+        if (preg_match('/\b(vendi|vendio|vende|vender|venta|ticket|cobra|cobrar|cobre|pago|pagado|efectivo|tarjeta|transferencia)\b/', $normalized) === 1) {
+            return true;
+        }
+
+        return preg_match('/\b(registra|registrar)\b.*\b(cono|conos|paleta|paletas|fresa|fresas|helado|helados|producto|productos)\b/', $normalized) === 1;
     }
 
     private function normalizeText(string $message): string
