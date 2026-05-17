@@ -1,5 +1,6 @@
 <?php
 
+use App\Ai\Agents\IntentParserAgent;
 use App\Ai\Agents\OperationsAgent;
 use App\Models\CorteCaja;
 use App\Models\Insumo;
@@ -30,6 +31,20 @@ beforeEach(function () {
     ]);
 });
 
+function fakeNonSaleIntent(): void
+{
+    IntentParserAgent::fake([
+        [
+            'intent' => 'otra',
+            'confidence' => 0.2,
+            'items' => [],
+            'metodo_pago' => 'desconocido',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+    ])->preventStrayPrompts();
+}
+
 test('asistente page loads for authenticated users', function () {
     $user = User::factory()->create();
 
@@ -58,6 +73,8 @@ test('assistant chat restores session history', function () {
 });
 
 test('openrouter assistant uses laravel ai agent', function () {
+    fakeNonSaleIntent();
+
     OperationsAgent::fake([
         'La caja esta cerrada. Puedo preparar apertura si me das el monto inicial.',
     ])->preventStrayPrompts();
@@ -101,6 +118,8 @@ test('openrouter assistant extends php execution limit beyond model timeout', fu
 });
 
 test('assistant page turns model timeout into user friendly error', function () {
+    fakeNonSaleIntent();
+
     OperationsAgent::fake(function (): string {
         throw new RuntimeException('cURL error 28: Operation timed out after 120001 milliseconds');
     })->preventStrayPrompts();
@@ -115,6 +134,8 @@ test('assistant page turns model timeout into user friendly error', function () 
 });
 
 test('assistant loop mode plans and executes until completed', function () {
+    fakeNonSaleIntent();
+
     OperationsAgent::fake([
         'Plan: 1. Consultar caja. 2. Resumir estado. Empiezo ejecucion controlada.',
         'LOOP_COMPLETED: La caja esta cerrada y no hay mas acciones necesarias.',
@@ -142,6 +163,25 @@ test('assistant loop mode pauses when a prepared operation needs confirmation', 
         CategoriaInsumoSeeder::class,
         CategoriaGastoSeeder::class,
     ]);
+
+    IntentParserAgent::fake([
+        [
+            'intent' => 'otra',
+            'confidence' => 0.2,
+            'items' => [],
+            'metodo_pago' => 'desconocido',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+        [
+            'intent' => 'otra',
+            'confidence' => 0.2,
+            'items' => [],
+            'metodo_pago' => 'desconocido',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+    ])->preventStrayPrompts();
 
     OperationsAgent::fake([
         'Plan: 1. Preparar el alta. 2. Esperar confirmacion. Empiezo ejecucion controlada.',
@@ -185,6 +225,8 @@ test('laravel ai agent can invoke operations tool', function () {
         ProductoInsumoSeeder::class,
     ]);
 
+    fakeNonSaleIntent();
+
     OperationsAgent::fake([
         new ToolCall(
             'call_1',
@@ -211,6 +253,8 @@ test('laravel ai agent can invoke operations tool', function () {
 });
 
 test('prepared confirmations are kept for the next agent prompt', function () {
+    fakeNonSaleIntent();
+
     OperationsAgent::fake(function (string $prompt): string {
         expect($prompt)->toContain('confirmation_token')
             ->and($prompt)->toContain('tok_test');
@@ -246,6 +290,7 @@ test('assistant confirms a single pending sale without asking the model again', 
         ProductoInsumoSeeder::class,
     ]);
 
+    IntentParserAgent::fake([])->preventStrayPrompts();
     OperationsAgent::fake([])->preventStrayPrompts();
 
     $user = User::factory()->create();
@@ -277,6 +322,7 @@ test('assistant confirms a single pending sale without asking the model again', 
         ->and($response['pending_confirmations'])->toBe([])
         ->and(Venta::query()->count())->toBe(1);
 
+    IntentParserAgent::assertNeverPrompted();
     OperationsAgent::assertNeverPrompted();
 });
 
@@ -292,6 +338,22 @@ test('assistant prepares straightforward sales without relying on the model', fu
         ProductoInsumoSeeder::class,
     ]);
 
+    IntentParserAgent::fake([
+        [
+            'intent' => 'registrar_venta',
+            'confidence' => 0.95,
+            'items' => [
+                [
+                    'producto_nombre' => 'Cono sencillo',
+                    'cantidad' => 2,
+                    'selected_options' => [],
+                ],
+            ],
+            'metodo_pago' => 'efectivo',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+    ])->preventStrayPrompts();
     OperationsAgent::fake([])->preventStrayPrompts();
 
     $user = User::factory()->create();
@@ -316,10 +378,27 @@ test('assistant prepares straightforward sales without relying on the model', fu
         ->and($response['pending_confirmations'][0]['operation'])->toBe('venta')
         ->and(Venta::query()->count())->toBe(0);
 
+    IntentParserAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'registra una venta'));
     OperationsAgent::assertNeverPrompted();
 });
 
 test('assistant blocks new writes while another operation is pending', function () {
+    IntentParserAgent::fake([
+        [
+            'intent' => 'registrar_venta',
+            'confidence' => 0.95,
+            'items' => [
+                [
+                    'producto_nombre' => 'Cono sencillo',
+                    'cantidad' => 2,
+                    'selected_options' => [],
+                ],
+            ],
+            'metodo_pago' => 'efectivo',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+    ])->preventStrayPrompts();
     OperationsAgent::fake([])->preventStrayPrompts();
 
     $user = User::factory()->create();
@@ -336,10 +415,31 @@ test('assistant blocks new writes while another operation is pending', function 
         ->and($response['pending_confirmations'][0]['operation'])->toBe('abrir_caja')
         ->and($response['tool_results'])->toBe([]);
 
+    IntentParserAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'tambien registra una venta'));
+    OperationsAgent::assertNeverPrompted();
+});
+
+test('assistant fails closed when intent parser is unavailable for a possible sale', function () {
+    IntentParserAgent::fake(function (): never {
+        throw new RuntimeException('parser unavailable');
+    })->preventStrayPrompts();
+    OperationsAgent::fake([])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+    $assistant = app(OpenRouterAssistantService::class);
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'registra una venta de 2 conos sencillos en efectivo'],
+    ], $user);
+
+    expect($response['reply'])->toContain('No pude interpretar con seguridad')
+        ->and($response['tool_results'])->toBe([])
+        ->and($response['pending_confirmations'])->toBe([]);
+
     OperationsAgent::assertNeverPrompted();
 });
 
 test('assistant cancels pending confirmations directly', function () {
+    IntentParserAgent::fake([])->preventStrayPrompts();
     OperationsAgent::fake([])->preventStrayPrompts();
 
     $user = User::factory()->create();
@@ -356,6 +456,7 @@ test('assistant cancels pending confirmations directly', function () {
         ->and($response['tool_results'])->toBe([])
         ->and($response['pending_confirmations'])->toBe([]);
 
+    IntentParserAgent::assertNeverPrompted();
     OperationsAgent::assertNeverPrompted();
 });
 
@@ -367,6 +468,8 @@ test('laravel ai agent can prepare insumo creation through operations tool', fun
         CategoriaInsumoSeeder::class,
         CategoriaGastoSeeder::class,
     ]);
+
+    fakeNonSaleIntent();
 
     OperationsAgent::fake([
         new ToolCall(

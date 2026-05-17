@@ -2,6 +2,7 @@
 
 namespace App\Services\Ai;
 
+use App\Ai\Agents\IntentParserAgent;
 use App\Ai\Agents\OperationsAgent;
 use App\Models\Producto;
 use App\Models\User;
@@ -53,12 +54,23 @@ class OpenRouterAssistantService
             return $this->confirmFromPending($visibleHistory, $pendingConfirmations);
         }
 
-        if ($pendingConfirmations !== [] && $this->isMutationIntent($prompt)) {
+        $intent = $this->parseIntent($prompt, $previousMessages);
+
+        if (($intent['notes'] ?? null) === 'parser_unavailable' && $this->looksLikeMutationText($prompt)) {
+            return $this->directReply(
+                $visibleHistory,
+                'No pude interpretar con seguridad esa operacion. Intenta de nuevo en un momento; no voy a preparar ni guardar cambios sin entenderlos bien.',
+                [],
+                $pendingConfirmations,
+            );
+        }
+
+        if ($pendingConfirmations !== [] && $this->isMutationIntent($intent, $prompt)) {
             return $this->pendingOperationBlock($visibleHistory, $pendingConfirmations);
         }
 
-        if ($this->isSaleIntent($prompt)) {
-            return $this->prepareSaleFromPrompt($visibleHistory, $prompt);
+        if (($intent['intent'] ?? null) === 'registrar_venta') {
+            return $this->prepareSaleFromIntent($visibleHistory, $intent);
         }
 
         $response = $this->promptAgent($prompt, $previousMessages, $pendingConfirmations);
@@ -124,7 +136,26 @@ class OpenRouterAssistantService
             ];
         }
 
-        if ($pendingConfirmations !== [] && $this->isMutationIntent($goal)) {
+        $intent = $this->parseIntent($goal, array_slice($visibleHistory, 0, $lastUserIndex));
+
+        if (($intent['notes'] ?? null) === 'parser_unavailable' && $this->looksLikeMutationText($goal)) {
+            return [
+                ...$this->directReply(
+                    $visibleHistory,
+                    'No pude interpretar con seguridad esa operacion. Intenta de nuevo en un momento; no voy a preparar ni guardar cambios sin entenderlos bien.',
+                    [],
+                    $pendingConfirmations,
+                ),
+                'loop_steps' => [[
+                    'tipo' => 'guard',
+                    'estado' => 'blocked',
+                    'resumen' => 'El parser de intencion no respondio y se bloqueo una posible escritura.',
+                    'tools' => [],
+                ]],
+            ];
+        }
+
+        if ($pendingConfirmations !== [] && $this->isMutationIntent($intent, $goal)) {
             return [
                 ...$this->pendingOperationBlock($visibleHistory, $pendingConfirmations),
                 'loop_steps' => [[
@@ -136,8 +167,8 @@ class OpenRouterAssistantService
             ];
         }
 
-        if ($this->isSaleIntent($goal)) {
-            $result = $this->prepareSaleFromPrompt($visibleHistory, $goal);
+        if (($intent['intent'] ?? null) === 'registrar_venta') {
+            $result = $this->prepareSaleFromIntent($visibleHistory, $intent);
 
             return [
                 ...$result,
@@ -314,6 +345,145 @@ class OpenRouterAssistantService
                 ])
                 ->values()
                 ->all(),
+        ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $history
+     * @return array<string, mixed>
+     */
+    private function parseIntent(string $prompt, array $history): array
+    {
+        $timeout = min($this->openRouterTimeout(), 45);
+        $this->extendPhpExecutionLimit($timeout);
+
+        try {
+            $response = IntentParserAgent::make(messages: $this->toSdkMessages($history))
+                ->prompt(
+                    prompt: $this->intentPrompt($prompt),
+                    provider: 'openrouter',
+                    model: (string) config('services.openrouter.model', 'openai/gpt-4o-mini'),
+                    timeout: $timeout,
+                );
+
+            $structured = property_exists($response, 'structured') && is_array($response->structured)
+                ? $response->structured
+                : $this->decodeIntentText($response->text);
+
+            return $this->normalizeIntent($structured);
+        } catch (\Throwable) {
+            return $this->fallbackIntent($prompt);
+        }
+    }
+
+    private function intentPrompt(string $prompt): string
+    {
+        return <<<PROMPT
+Mensaje del usuario:
+{$prompt}
+
+Clasifica y extrae la intencion. Si es venta, devuelve producto_nombre, cantidad y metodo_pago. Si faltan datos, usa missing_fields.
+PROMPT;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeIntentText(string $text): array
+    {
+        $decoded = json_decode($text, true);
+
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+
+        if (preg_match('/\{.*\}/s', $text, $matches) === 1) {
+            $decoded = json_decode($matches[0], true);
+
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $intent
+     * @return array<string, mixed>
+     */
+    private function normalizeIntent(array $intent): array
+    {
+        $normalizedIntent = in_array($intent['intent'] ?? null, ['registrar_venta', 'confirmar', 'cancelar', 'consulta', 'otra'], true)
+            ? $intent['intent']
+            : 'otra';
+
+        $paymentMethod = in_array($intent['metodo_pago'] ?? null, ['efectivo', 'tarjeta', 'transferencia', 'mixto', 'desconocido'], true)
+            ? $intent['metodo_pago']
+            : 'desconocido';
+
+        $items = collect($intent['items'] ?? [])
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->map(fn (array $item): array => [
+                'producto_nombre' => trim((string) ($item['producto_nombre'] ?? '')),
+                'cantidad' => is_numeric($item['cantidad'] ?? null) ? (float) $item['cantidad'] : null,
+                'selected_options' => is_array($item['selected_options'] ?? null) ? $item['selected_options'] : [],
+            ])
+            ->filter(fn (array $item): bool => $item['producto_nombre'] !== '' || $item['cantidad'] !== null)
+            ->values()
+            ->all();
+
+        $missingFields = collect($intent['missing_fields'] ?? [])
+            ->filter(fn (mixed $field): bool => is_string($field) && trim($field) !== '')
+            ->values()
+            ->all();
+
+        return [
+            'intent' => $normalizedIntent,
+            'confidence' => is_numeric($intent['confidence'] ?? null) ? (float) $intent['confidence'] : 0.0,
+            'items' => $items,
+            'metodo_pago' => $paymentMethod,
+            'missing_fields' => $missingFields,
+            'notes' => $intent['notes'] ?? null,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fallbackIntent(string $prompt): array
+    {
+        $normalized = $this->normalizeText($prompt);
+
+        if ($this->isCancellationIntent($normalized)) {
+            return [
+                'intent' => 'cancelar',
+                'confidence' => 0.8,
+                'items' => [],
+                'metodo_pago' => 'desconocido',
+                'missing_fields' => [],
+                'notes' => 'fallback',
+            ];
+        }
+
+        if ($this->isConfirmationIntent($normalized)) {
+            return [
+                'intent' => 'confirmar',
+                'confidence' => 0.8,
+                'items' => [],
+                'metodo_pago' => 'desconocido',
+                'missing_fields' => [],
+                'notes' => 'fallback',
+            ];
+        }
+
+        return [
+            'intent' => 'otra',
+            'confidence' => 0.0,
+            'items' => [],
+            'metodo_pago' => 'desconocido',
+            'missing_fields' => [],
+            'notes' => 'parser_unavailable',
         ];
     }
 
@@ -514,39 +684,56 @@ PROMPT;
      * @param  array<int, array<string, mixed>>  $messages
      * @return array<string, mixed>
      */
-    private function prepareSaleFromPrompt(array $messages, string $prompt): array
+    private function prepareSaleFromIntent(array $messages, array $intent): array
     {
-        $quantity = $this->extractQuantity($prompt);
+        $missingFields = $intent['missing_fields'] ?? [];
+        $items = $intent['items'] ?? [];
 
-        if ($quantity === null) {
+        if ($missingFields !== [] || $items === []) {
             return $this->directReply(
                 $messages,
-                'Para preparar la venta necesito la cantidad. Ejemplo: `vendí 2 conos sencillos en efectivo`.',
+                $this->missingSaleFieldsReply($missingFields, $items),
                 [],
                 [],
             );
         }
 
-        $productResolution = $this->resolveProductFromPrompt($prompt);
+        $saleItems = [];
 
-        if (($productResolution['status'] ?? null) !== 'resolved') {
-            return $this->directReply(
-                $messages,
-                (string) $productResolution['reply'],
-                [],
-                [],
-            );
-        }
+        foreach ($items as $item) {
+            $quantity = $item['cantidad'] ?? null;
 
-        /** @var Producto $product */
-        $product = $productResolution['product'];
-        $paymentMethod = $this->extractPaymentMethod($prompt);
-        $result = $this->operations->prepareSale([
-            [
+            if (! is_numeric($quantity) || (float) $quantity <= 0) {
+                return $this->directReply(
+                    $messages,
+                    'Para preparar la venta necesito cantidades mayores a cero.',
+                    [],
+                    [],
+                );
+            }
+
+            $productResolution = $this->resolveProductByName((string) ($item['producto_nombre'] ?? ''));
+
+            if (($productResolution['status'] ?? null) !== 'resolved') {
+                return $this->directReply(
+                    $messages,
+                    (string) $productResolution['reply'],
+                    [],
+                    [],
+                );
+            }
+
+            /** @var Producto $product */
+            $product = $productResolution['product'];
+            $saleItems[] = [
                 'producto_id' => $product->id,
-                'cantidad' => $quantity,
-            ],
-        ], 0, $paymentMethod);
+                'cantidad' => (float) $quantity,
+                'selected_options' => $item['selected_options'] ?? [],
+            ];
+        }
+
+        $paymentMethod = $intent['metodo_pago'] === 'desconocido' ? 'efectivo' : (string) $intent['metodo_pago'];
+        $result = $this->operations->prepareSale($saleItems, 0, $paymentMethod);
 
         $toolResults = [[
             'name' => 'operacion_godslove',
@@ -570,44 +757,21 @@ PROMPT;
         );
     }
 
-    private function extractQuantity(string $prompt): ?float
-    {
-        $normalized = $this->normalizeText($prompt);
-
-        if (preg_match('/\b(\d+(?:[.,]\d+)?)\b/', $normalized, $matches) === 1) {
-            return (float) str_replace(',', '.', $matches[1]);
-        }
-
-        $words = [
-            'un' => 1,
-            'una' => 1,
-            'uno' => 1,
-            'dos' => 2,
-            'tres' => 3,
-            'cuatro' => 4,
-            'cinco' => 5,
-            'seis' => 6,
-            'siete' => 7,
-            'ocho' => 8,
-            'nueve' => 9,
-            'diez' => 10,
-        ];
-
-        foreach ($words as $word => $quantity) {
-            if (preg_match('/\b'.preg_quote($word, '/').'\b/', $normalized) === 1) {
-                return (float) $quantity;
-            }
-        }
-
-        return null;
-    }
-
     /**
      * @return array{status: string, product?: Producto, reply?: string}
      */
-    private function resolveProductFromPrompt(string $prompt): array
+    private function resolveProductByName(string $productName): array
     {
-        $promptTokens = collect(explode(' ', $this->saleSearchText($prompt)))
+        $productName = trim($productName);
+
+        if ($productName === '') {
+            return [
+                'status' => 'blocked',
+                'reply' => 'Para preparar la venta necesito el producto.',
+            ];
+        }
+
+        $promptTokens = collect(explode(' ', $this->normalizeText($productName)))
             ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
             ->map(fn (string $token): string => $this->singularToken($token))
             ->values();
@@ -623,7 +787,7 @@ PROMPT;
             ->where('activo', true)
             ->orderBy('nombre')
             ->get()
-            ->map(function (Producto $product) use ($prompt, $promptTokens): array {
+            ->map(function (Producto $product) use ($productName, $promptTokens): array {
                 $productTokens = collect(explode(' ', $this->normalizeText($product->nombre)))
                     ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
                     ->map(fn (string $token): string => $this->singularToken($token))
@@ -633,7 +797,7 @@ PROMPT;
                     ->filter(fn (string $token): bool => $promptTokens->contains($token))
                     ->count();
 
-                $exactName = str_contains($this->normalizeText($prompt), $this->normalizeText($product->nombre));
+                $exactName = $this->normalizeText($productName) === $this->normalizeText($product->nombre);
 
                 return [
                     'product' => $product,
@@ -647,7 +811,7 @@ PROMPT;
         if ($matches->isEmpty()) {
             return [
                 'status' => 'blocked',
-                'reply' => 'No encontre un producto activo claro para esa venta. Dime el nombre exacto del producto.',
+                'reply' => 'No encontre un producto activo claro para `'.$productName.'`. Dime el nombre exacto del producto.',
             ];
         }
 
@@ -672,29 +836,6 @@ PROMPT;
             'status' => 'resolved',
             'product' => $best['product'],
         ];
-    }
-
-    private function saleSearchText(string $prompt): string
-    {
-        return Str::of($prompt)
-            ->lower()
-            ->ascii()
-            ->replaceMatches('/\b(registra|registrar|registre|vendi|vendí|venta|vender|vendio|vendió|cobra|cobrar|cobre|de|del|la|el|los|las|en|por|con|pago|pagaron|cliente|efectivo|tarjeta|transferencia|mixto|pesos|peso|mxn)\b/', ' ')
-            ->replaceMatches('/\b\d+(?:[.,]\d+)?\b/', ' ')
-            ->squish()
-            ->toString();
-    }
-
-    private function extractPaymentMethod(string $prompt): string
-    {
-        $normalized = $this->normalizeText($prompt);
-
-        return match (true) {
-            str_contains($normalized, 'tarjeta') => 'tarjeta',
-            str_contains($normalized, 'transferencia') => 'transferencia',
-            str_contains($normalized, 'mixto') => 'mixto',
-            default => 'efectivo',
-        };
     }
 
     private function singularToken(string $token): string
@@ -740,6 +881,23 @@ PROMPT;
             ->implode("\n");
 
         return "No pude preparar la venta.\n\n".($errors !== '' ? $errors : 'Falta informacion para preparar la venta.');
+    }
+
+    /**
+     * @param  array<int, string>  $missingFields
+     * @param  array<int, array<string, mixed>>  $items
+     */
+    private function missingSaleFieldsReply(array $missingFields, array $items): string
+    {
+        $missing = collect($missingFields)
+            ->map(fn (string $field): string => '- '.$field)
+            ->implode("\n");
+
+        if ($missing === '') {
+            $missing = $items === [] ? '- producto y cantidad' : '- datos incompletos de venta';
+        }
+
+        return "No puedo preparar la venta todavia. Falta:\n{$missing}";
     }
 
     /**
@@ -808,20 +966,25 @@ PROMPT;
         return preg_match('/\b(no|cancela|cancelalo|cancelala|deten|espera|no confirmo)\b/', $normalized) === 1;
     }
 
-    private function isSaleIntent(string $message): bool
+    /**
+     * @param  array<string, mixed>  $intent
+     */
+    private function isMutationIntent(array $intent, string $message): bool
     {
+        if (($intent['intent'] ?? null) === 'registrar_venta') {
+            return true;
+        }
+
         $normalized = $this->normalizeText($message);
 
-        return preg_match('/\b(vendi|vendio|venta|registra|registrar|cobra|cobrar)\b/', $normalized) === 1
-            && ! preg_match('/\b(caja|insumo|categoria|producto nuevo|alta|inventario|movimiento|cierre|abrir)\b/', $normalized);
+        return preg_match('/\b(abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar|registra|registrar|cobra|cobrar)\b/', $normalized) === 1;
     }
 
-    private function isMutationIntent(string $message): bool
+    private function looksLikeMutationText(string $message): bool
     {
         $normalized = $this->normalizeText($message);
 
-        return $this->isSaleIntent($normalized)
-            || preg_match('/\b(abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar|registra|registrar|cobra|cobrar)\b/', $normalized) === 1;
+        return preg_match('/\b(vendi|vendio|venta|registra|registrar|cobra|cobrar|abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar)\b/', $normalized) === 1;
     }
 
     private function normalizeText(string $message): string
