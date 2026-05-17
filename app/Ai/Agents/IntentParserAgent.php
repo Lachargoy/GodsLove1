@@ -25,11 +25,28 @@ class IntentParserAgent implements Agent, Conversational, HasStructuredOutput
     public function instructions(): Stringable|string
     {
         return <<<'PROMPT'
-Eres el parser de intencion operativo de GodsLove.
-Devuelve solo datos estructurados. No converses con el usuario.
-Tu trabajo es entender si el mensaje pide registrar una venta, una consulta, una confirmacion, una cancelacion u otra cosa.
-Para ventas, extrae items con producto_nombre tal como lo dijo el usuario, cantidad numerica y metodo de pago.
-No inventes productos, cantidades ni pago. Si falta algo, marca missing_fields.
+Eres el ROUTER DE PROCESOS operativo de GodsLove. Devuelve solo JSON estructurado; no converses con el usuario.
+
+Tu tarea no es responder: es enrutar el siguiente paso de una maquina de estados conversacional.
+
+Modelo mental:
+- Cada conversacion puede estar dentro de un proceso activo: venta, caja, inventario, alta de insumo, alta de categoria, alta de producto, receta de producto, opciones/sabores, consulta u otro.
+- Si el usuario responde con datos cortos, correcciones, "inventalo tu", "ese", "si", "no", "solo de prueba", etc., debes mantener el proceso activo inferido del historial, no empezar otro.
+- Solo cambia de proceso si el usuario lo pide claramente.
+
+Rutas disponibles:
+- deterministic_sale: unica ruta para ventas que el backend preparara de forma determinista. Usala solo si el mensaje actual pide registrar/cobrar una venta o continua una venta activa.
+- agent_tools: altas de categorias, insumos, productos, recetas, opciones, caja, inventario, consultas operativas o cualquier flujo que deba resolver el agente con tools.
+- confirm: el usuario confirma una operacion pendiente.
+- cancel: el usuario cancela o descarta una operacion pendiente.
+- answer: charla breve o pregunta que no requiere tool.
+
+Reglas duras:
+- No conviertas altas de categorias, insumos, productos, recetas u opciones en ventas.
+- No conviertas una respuesta de seguimiento en venta salvo que el proceso activo sea venta.
+- No inventes productos, cantidades, pago, precios, stock ni costos.
+- Para ventas, extrae items con producto_nombre literal, cantidad numerica y metodo_pago. Si falta algo, marca missing_fields.
+- Para "inventalo tu" dentro de alta_categoria u otro dato no financiero, route debe ser agent_tools, no deterministic_sale.
 PROMPT;
     }
 
@@ -55,6 +72,18 @@ PROMPT;
     public function schema(JsonSchema $schema): array
     {
         return [
+            'route' => $schema->string()
+                ->enum(['deterministic_sale', 'agent_tools', 'confirm', 'cancel', 'answer'])
+                ->description('Ruta de ejecucion que debe tomar el backend.')
+                ->required(),
+            'active_flow' => $schema->string()
+                ->enum(['none', 'venta', 'caja', 'inventario', 'alta_insumo', 'alta_categoria', 'alta_producto', 'receta_producto', 'opciones_producto', 'consulta', 'otro'])
+                ->description('Proceso conversacional activo despues de leer el historial.')
+                ->required(),
+            'flow_status' => $schema->string()
+                ->enum(['new', 'continue', 'ready_to_prepare', 'waiting_user', 'ready_to_confirm', 'done'])
+                ->description('Estado del proceso activo.')
+                ->required(),
             'intent' => $schema->string()
                 ->enum(['registrar_venta', 'confirmar', 'cancelar', 'consulta', 'otra'])
                 ->description('Intencion principal del usuario.')
@@ -81,6 +110,9 @@ PROMPT;
                 ->required(),
             'notes' => $schema->string()
                 ->description('Notas breves para el backend.')
+                ->nullable(),
+            'reason' => $schema->string()
+                ->description('Razon breve de enrutamiento. No se muestra al usuario.')
                 ->nullable(),
         ];
     }

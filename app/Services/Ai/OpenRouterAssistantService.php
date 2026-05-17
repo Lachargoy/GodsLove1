@@ -80,7 +80,7 @@ class OpenRouterAssistantService
             return $this->pendingOperationBlock($visibleHistory, $pendingConfirmations);
         }
 
-        if (($intent['intent'] ?? null) === 'registrar_venta' && $this->looksLikeSaleText($prompt)) {
+        if (($intent['route'] ?? null) === 'deterministic_sale') {
             return $this->prepareSaleFromIntent($visibleHistory, $intent);
         }
 
@@ -194,7 +194,7 @@ class OpenRouterAssistantService
             ];
         }
 
-        if (($intent['intent'] ?? null) === 'registrar_venta' && $this->looksLikeSaleText($goal)) {
+        if (($intent['route'] ?? null) === 'deterministic_sale') {
             $result = $this->prepareSaleFromIntent($visibleHistory, $intent);
 
             return [
@@ -410,9 +410,9 @@ Mensaje del usuario:
 {$prompt}
 
 Clasifica y extrae la intencion. Si es venta, devuelve producto_nombre, cantidad y metodo_pago. Si faltan datos, usa missing_fields.
-Solo clasifica como registrar_venta cuando el mensaje actual habla claramente de vender, venta, cobrar, ticket, pago, efectivo, tarjeta o transferencia.
-Si el mensaje es una respuesta corta de seguimiento, una categoria, una descripcion, una correccion vaga o contiene "prueba" sin lenguaje de venta, usa otra.
-No conviertas altas de categorias, insumos, productos, recetas u opciones en ventas.
+Devuelve route, active_flow y flow_status siguiendo la maquina de estados del system prompt.
+Usa route=deterministic_sale solo para ventas reales o continuacion de una venta activa.
+Usa route=agent_tools para altas de categorias, insumos, productos, recetas, opciones, caja, inventario y seguimientos de esos procesos.
 PROMPT;
     }
 
@@ -444,9 +444,28 @@ PROMPT;
      */
     private function normalizeIntent(array $intent): array
     {
+        $route = in_array($intent['route'] ?? null, ['deterministic_sale', 'agent_tools', 'confirm', 'cancel', 'answer'], true)
+            ? $intent['route']
+            : null;
         $normalizedIntent = in_array($intent['intent'] ?? null, ['registrar_venta', 'confirmar', 'cancelar', 'consulta', 'otra'], true)
             ? $intent['intent']
             : 'otra';
+        $activeFlow = in_array($intent['active_flow'] ?? null, ['none', 'venta', 'caja', 'inventario', 'alta_insumo', 'alta_categoria', 'alta_producto', 'receta_producto', 'opciones_producto', 'consulta', 'otro'], true)
+            ? $intent['active_flow']
+            : 'none';
+        $flowStatus = in_array($intent['flow_status'] ?? null, ['new', 'continue', 'ready_to_prepare', 'waiting_user', 'ready_to_confirm', 'done'], true)
+            ? $intent['flow_status']
+            : 'new';
+
+        if ($route === null) {
+            $route = match ($normalizedIntent) {
+                'registrar_venta' => 'deterministic_sale',
+                'confirmar' => 'confirm',
+                'cancelar' => 'cancel',
+                'consulta' => 'agent_tools',
+                default => 'answer',
+            };
+        }
 
         $paymentMethod = in_array($intent['metodo_pago'] ?? null, ['efectivo', 'tarjeta', 'transferencia', 'mixto', 'desconocido'], true)
             ? $intent['metodo_pago']
@@ -469,12 +488,16 @@ PROMPT;
             ->all();
 
         return [
+            'route' => $route,
+            'active_flow' => $activeFlow,
+            'flow_status' => $flowStatus,
             'intent' => $normalizedIntent,
             'confidence' => is_numeric($intent['confidence'] ?? null) ? (float) $intent['confidence'] : 0.0,
             'items' => $items,
             'metodo_pago' => $paymentMethod,
             'missing_fields' => $missingFields,
             'notes' => $intent['notes'] ?? null,
+            'reason' => $intent['reason'] ?? null,
         ];
     }
 
@@ -487,6 +510,9 @@ PROMPT;
 
         if ($this->isCancellationIntent($normalized)) {
             return [
+                'route' => 'cancel',
+                'active_flow' => 'none',
+                'flow_status' => 'done',
                 'intent' => 'cancelar',
                 'confidence' => 0.8,
                 'items' => [],
@@ -498,6 +524,9 @@ PROMPT;
 
         if ($this->isConfirmationIntent($normalized)) {
             return [
+                'route' => 'confirm',
+                'active_flow' => 'none',
+                'flow_status' => 'ready_to_confirm',
                 'intent' => 'confirmar',
                 'confidence' => 0.8,
                 'items' => [],
@@ -508,6 +537,9 @@ PROMPT;
         }
 
         return [
+            'route' => 'answer',
+            'active_flow' => 'none',
+            'flow_status' => 'new',
             'intent' => 'otra',
             'confidence' => 0.0,
             'items' => [],
@@ -1407,17 +1439,6 @@ PROMPT;
         $normalized = $this->normalizeText($message);
 
         return preg_match('/\b(vendi|vendio|venta|registra|registrar|cobra|cobrar|abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar)\b/', $normalized) === 1;
-    }
-
-    private function looksLikeSaleText(string $message): bool
-    {
-        $normalized = $this->normalizeText($message);
-
-        if (preg_match('/\b(vendi|vendio|vende|vender|venta|ticket|cobra|cobrar|cobre|pago|pagado|efectivo|tarjeta|transferencia)\b/', $normalized) === 1) {
-            return true;
-        }
-
-        return preg_match('/\b(registra|registrar)\b.*\b(cono|conos|paleta|paletas|fresa|fresas|helado|helados|producto|productos)\b/', $normalized) === 1;
     }
 
     private function normalizeText(string $message): string

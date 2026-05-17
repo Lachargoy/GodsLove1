@@ -102,6 +102,9 @@ test('openrouter assistant uses laravel ai agent', function () {
 test('assistant does not force vague follow ups into the sale flow', function () {
     IntentParserAgent::fake([
         [
+            'route' => 'agent_tools',
+            'active_flow' => 'alta_categoria',
+            'flow_status' => 'continue',
             'intent' => 'registrar_venta',
             'confidence' => 0.72,
             'items' => [],
