@@ -219,6 +219,51 @@ test('assistant loop mode pauses when a prepared operation needs confirmation', 
         ->assertSee('Loop pausado');
 });
 
+test('assistant page shows confirmation modal and confirms prepared tool operations', function () {
+    $this->seed([
+        UnitSeeder::class,
+        InventoryCategorySeeder::class,
+        CategoriaProductoSeeder::class,
+        CategoriaInsumoSeeder::class,
+        CategoriaGastoSeeder::class,
+    ]);
+
+    fakeNonSaleIntent();
+
+    OperationsAgent::fake([
+        new ToolCall(
+            'call_modal_insumo',
+            'operacion_godslove',
+            [
+                'action' => 'preparar_alta_insumo',
+                'nombre' => 'Azucar modal AI',
+                'unidad_medida' => 'kg',
+                'cantidad_actual' => 5,
+                'cantidad_minima' => 1,
+                'costo_unitario' => 22,
+            ],
+            'call_modal_insumo',
+        ),
+        'Prepare el alta de Azucar modal AI y necesito confirmacion.',
+    ])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+
+    Volt::actingAs($user)
+        ->test('asistente.index')
+        ->set('prompt', 'Da de alta azucar modal con 5 kg a 22 pesos')
+        ->call('enviar')
+        ->assertSet('pendingConfirmations.0.operation', 'alta_insumo')
+        ->assertSee('Confirmar alta de insumo')
+        ->assertSee('Azucar modal AI')
+        ->assertSee('Confirmar y guardar')
+        ->call('confirmarPendiente')
+        ->assertSet('pendingConfirmations', [])
+        ->assertSee('Operacion confirmada');
+
+    expect(Insumo::query()->where('nombre', 'Azucar modal AI')->exists())->toBeTrue();
+});
+
 test('laravel ai agent can invoke operations tool', function () {
     $this->seed([
         UnitSeeder::class,

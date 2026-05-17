@@ -61,9 +61,32 @@ new class extends Component
             return;
         }
 
+        $this->prompt = '';
+        $this->sendAssistantMessage($assistant, $message);
+    }
+
+    public function confirmarPendiente(OpenRouterAssistantService $assistant): void
+    {
+        if ($this->getConfirmationModalProperty() === null) {
+            return;
+        }
+
+        $this->sendAssistantMessage($assistant, 'confirmar');
+    }
+
+    public function cancelarPendiente(OpenRouterAssistantService $assistant): void
+    {
+        if ($this->pendingConfirmations === []) {
+            return;
+        }
+
+        $this->sendAssistantMessage($assistant, 'cancelar');
+    }
+
+    private function sendAssistantMessage(OpenRouterAssistantService $assistant, string $message): void
+    {
         $this->error = null;
         $this->lastToolResults = [];
-        $this->prompt = '';
         $this->messages[] = [
             'role' => 'user',
             'content' => $message,
@@ -134,6 +157,139 @@ new class extends Component
             ->filter(fn (array $message): bool => ! ($message['hidden'] ?? false))
             ->filter(fn (array $message): bool => in_array($message['role'] ?? null, ['user', 'assistant'], true))
             ->count();
+    }
+
+    /**
+     * @return array{title: string, operation: string, lines: array<int, string>, meta: array<int, array{label: string, value: string}>, total: string|null}|null
+     */
+    public function getConfirmationModalProperty(): ?array
+    {
+        if (count($this->pendingConfirmations) !== 1) {
+            return null;
+        }
+
+        $pending = array_values($this->pendingConfirmations)[0];
+
+        if (blank($pending['confirmation_token'] ?? null)) {
+            return null;
+        }
+
+        $operation = (string) ($pending['operation'] ?? 'operacion');
+        $summary = is_array($pending['summary'] ?? null) ? $pending['summary'] : [];
+
+        return [
+            'title' => 'Confirmar '.$this->operationLabel($operation),
+            'operation' => $this->operationLabel($operation),
+            'lines' => $this->confirmationLines($summary),
+            'meta' => $this->confirmationMeta($summary),
+            'total' => is_numeric(data_get($summary, 'total')) ? '$'.number_format((float) data_get($summary, 'total'), 2) : null,
+        ];
+    }
+
+    private function operationLabel(string $operation): string
+    {
+        return match ($operation) {
+            'venta' => 'venta',
+            'abrir_caja' => 'apertura de caja',
+            'cerrar_caja' => 'cierre de caja',
+            'movimiento_inventario' => 'movimiento de inventario',
+            'alta_insumo' => 'alta de insumo',
+            'alta_categoria' => 'alta de categoria',
+            'alta_producto' => 'alta de producto',
+            'receta_producto' => 'receta de producto',
+            'opciones_producto' => 'opciones de producto',
+            default => str_replace('_', ' ', $operation),
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $summary
+     * @return array<int, string>
+     */
+    private function confirmationLines(array $summary): array
+    {
+        $lines = collect(data_get($summary, 'lineas', []))
+            ->filter(fn (mixed $line): bool => is_array($line))
+            ->map(fn (array $line): string => number_format((float) ($line['cantidad'] ?? 0), 2).' x '.($line['nombre'] ?? 'producto').' = $'.number_format((float) ($line['subtotal'] ?? 0), 2))
+            ->values();
+
+        if ($lines->isNotEmpty()) {
+            return $lines->all();
+        }
+
+        $items = collect(data_get($summary, 'items', []))
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->map(fn (array $item): string => number_format((float) ($item['cantidad'] ?? $item['cantidad_requerida'] ?? 0), 2).' x '.($item['nombre'] ?? 'item'))
+            ->values();
+
+        if ($items->isNotEmpty()) {
+            return $items->all();
+        }
+
+        $options = collect(data_get($summary, 'opciones', []))
+            ->filter(fn (mixed $option): bool => is_array($option))
+            ->map(fn (array $option): string => ($option['nombre'] ?? 'opcion').' - '.number_format((float) ($option['cantidad_por_seleccion'] ?? 0), 3).' '.($option['unidad'] ?? ''))
+            ->values();
+
+        if ($options->isNotEmpty()) {
+            return $options->all();
+        }
+
+        foreach (['producto', 'insumo', 'categoria'] as $key) {
+            if (filled($summary[$key] ?? null)) {
+                return [(string) $summary[$key]];
+            }
+        }
+
+        return ['Operacion preparada para guardar.'];
+    }
+
+    /**
+     * @param  array<string, mixed>  $summary
+     * @return array<int, array{label: string, value: string}>
+     */
+    private function confirmationMeta(array $summary): array
+    {
+        $fields = [
+            'metodo_pago' => 'Metodo',
+            'subtotal' => 'Subtotal',
+            'descuento' => 'Descuento',
+            'monto_inicial' => 'Monto inicial',
+            'monto_real_contado' => 'Monto contado',
+            'diferencia' => 'Diferencia',
+            'producto' => 'Producto',
+            'grupo.nombre' => 'Grupo',
+            'grupo.requeridas' => 'Requeridas',
+            'tipo' => 'Tipo',
+            'nombre' => 'Nombre',
+            'unidad_medida' => 'Unidad',
+            'cantidad_actual' => 'Stock inicial',
+            'cantidad_minima' => 'Stock minimo',
+            'costo_unitario' => 'Costo unitario',
+            'caja.monto_esperado_efectivo' => 'Efectivo esperado',
+            'caja.total_ventas' => 'Ventas del turno',
+        ];
+
+        return collect($fields)
+            ->map(function (string $label, string $path) use ($summary): ?array {
+                $value = data_get($summary, $path);
+
+                if ($value === null || $value === '') {
+                    return null;
+                }
+
+                if (is_numeric($value) && (str_contains($path, 'monto') || in_array($path, ['subtotal', 'descuento', 'diferencia', 'costo_unitario', 'caja.total_ventas'], true))) {
+                    $value = '$'.number_format((float) $value, 2);
+                }
+
+                return [
+                    'label' => $label,
+                    'value' => is_bool($value) ? ($value ? 'Si' : 'No') : (string) $value,
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
     }
 
     private function persistConversation(): void
@@ -221,6 +377,10 @@ new class extends Component
 ?>
 
 <div class="relative mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+    @php
+        $confirmationModal = $this->confirmationModal;
+    @endphp
+
     @if ($toast)
         <div
             wire:key="assistant-toast-{{ md5(json_encode($toast)) }}"
@@ -254,6 +414,62 @@ new class extends Component
                     'bg-amber-400' => in_array($toast['type'], ['pending', 'warning'], true),
                     'bg-rose-400' => $toast['type'] === 'error',
                 ]) style="width: 68%"></div>
+            </div>
+        </div>
+    @endif
+
+    @if ($confirmationModal)
+        <div class="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/30 px-4 py-6 backdrop-blur-sm">
+            <div class="w-full max-w-lg overflow-hidden rounded-[2rem] border border-white/80 bg-white shadow-2xl shadow-rose-950/20 ring-1 ring-rose-100">
+                <div class="bg-gradient-to-br from-rose-50 via-white to-emerald-50 px-5 py-5 sm:px-6">
+                    <div class="flex items-start justify-between gap-4">
+                        <div>
+                            <p class="text-xs font-black uppercase tracking-[0.16em] text-rose-500">Confirmacion segura</p>
+                            <h2 class="mt-1 text-2xl font-black text-slate-950">{{ $confirmationModal['title'] }}</h2>
+                            <p class="mt-2 text-sm leading-6 text-slate-600">Revisa los datos antes de guardar. El agente no ejecuta este cambio sin tu boton de confirmacion.</p>
+                        </div>
+                        <div class="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-rose-500 text-sm font-black text-white shadow-sm shadow-rose-900/20">GL</div>
+                    </div>
+                </div>
+
+                <div class="space-y-4 px-5 py-5 sm:px-6">
+                    <div class="rounded-3xl bg-slate-50 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">{{ $confirmationModal['operation'] }}</p>
+                            @if ($confirmationModal['total'])
+                                <span class="rounded-full bg-emerald-100 px-3 py-1 text-sm font-black text-emerald-800">{{ $confirmationModal['total'] }}</span>
+                            @endif
+                        </div>
+
+                        <div class="mt-3 space-y-2">
+                            @foreach ($confirmationModal['lines'] as $lineIndex => $line)
+                                <div wire:key="confirmation-line-{{ $lineIndex }}" class="rounded-2xl bg-white px-3 py-2 text-sm font-bold text-slate-800 ring-1 ring-slate-100">
+                                    {{ $line }}
+                                </div>
+                            @endforeach
+                        </div>
+                    </div>
+
+                    @if ($confirmationModal['meta'] !== [])
+                        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            @foreach ($confirmationModal['meta'] as $metaIndex => $meta)
+                                <div wire:key="confirmation-meta-{{ $metaIndex }}" class="rounded-2xl border border-rose-100 bg-rose-50/60 px-3 py-2">
+                                    <p class="text-[11px] font-black uppercase tracking-[0.12em] text-rose-500">{{ $meta['label'] }}</p>
+                                    <p class="mt-1 text-sm font-black text-slate-950">{{ $meta['value'] }}</p>
+                                </div>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+
+                <div class="flex flex-col-reverse gap-2 border-t border-rose-100 bg-white px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
+                    <button type="button" wire:click="cancelarPendiente" wire:loading.attr="disabled" class="inline-flex items-center justify-center rounded-full bg-slate-100 px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-60">
+                        Cancelar
+                    </button>
+                    <button type="button" wire:click="confirmarPendiente" wire:loading.attr="disabled" class="inline-flex items-center justify-center rounded-full bg-rose-500 px-5 py-3 text-sm font-black text-white shadow-sm shadow-rose-900/20 transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60">
+                        Confirmar y guardar
+                    </button>
+                </div>
             </div>
         </div>
     @endif
