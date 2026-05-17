@@ -51,7 +51,7 @@ test('asistente page loads for authenticated users', function () {
     $this->actingAs($user)
         ->get('/asistente')
         ->assertSuccessful()
-        ->assertSee('Consola IA de operaciones')
+        ->assertSee('Asistente de operaciones')
         ->assertSee('qwen/qwen3.5-122b-a10b');
 });
 
@@ -69,7 +69,7 @@ test('assistant chat restores session history', function () {
         ->test('asistente.index')
         ->assertSee('Mensaje guardado de prueba')
         ->assertSee('Mi pedido anterior')
-        ->assertSee('2 mensajes visibles');
+        ->assertSee('2 mensajes');
 });
 
 test('openrouter assistant uses laravel ai agent', function () {

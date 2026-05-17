@@ -31,6 +31,11 @@ new class extends Component
      */
     public array $pendingConfirmations = [];
 
+    /**
+     * @var array{type: string, title: string, message: string}|null
+     */
+    public ?array $toast = null;
+
     public function mount(): void
     {
         $this->messages = session($this->historySessionKey(), []);
@@ -73,6 +78,7 @@ new class extends Component
             $this->lastToolResults = $response['tool_results'];
             $this->pendingConfirmations = $response['pending_confirmations'];
             $this->lastLoopSteps = $response['loop_steps'] ?? [];
+            $this->toast = $this->toastFromResponse($response);
             $this->persistConversation();
         } catch (\Throwable $throwable) {
             $message = $throwable->getMessage();
@@ -80,6 +86,11 @@ new class extends Component
             $this->error = str_contains($message, 'timed out') || str_contains($message, 'cURL error 28')
                 ? 'El modelo tardo demasiado en responder. Intenta de nuevo o usa un modelo mas rapido en OPENROUTER_MODEL.'
                 : $message;
+            $this->toast = [
+                'type' => 'error',
+                'title' => 'Algo se atraveso',
+                'message' => $this->error,
+            ];
             $this->persistConversation();
         }
     }
@@ -87,6 +98,11 @@ new class extends Component
     public function limpiar(): void
     {
         $this->reset(['prompt', 'error', 'lastToolResults', 'lastLoopSteps', 'pendingConfirmations']);
+        $this->toast = [
+            'type' => 'success',
+            'title' => 'Conversacion limpia',
+            'message' => 'El espacio quedo listo para una nueva operacion.',
+        ];
         $this->messages = [
             [
                 'role' => 'assistant',
@@ -105,6 +121,11 @@ new class extends Component
     public function usarEjemplo(string $message): void
     {
         $this->prompt = $message;
+    }
+
+    public function dismissToast(): void
+    {
+        $this->toast = null;
     }
 
     public function getVisibleMessageCountProperty(): int
@@ -132,250 +153,303 @@ new class extends Component
     {
         return 'asistente.confirmations.'.(auth()->id() ?: 'guest');
     }
+
+    /**
+     * @param  array<string, mixed>  $response
+     * @return array{type: string, title: string, message: string}|null
+     */
+    private function toastFromResponse(array $response): ?array
+    {
+        $toolResult = collect($response['tool_results'] ?? [])
+            ->map(fn (array $tool): mixed => $tool['result'] ?? null)
+            ->first(fn (mixed $result): bool => is_array($result) && filled($result['status'] ?? null));
+
+        if (is_array($toolResult)) {
+            $status = $toolResult['status'] ?? null;
+            $operation = str_replace('_', ' ', (string) ($toolResult['operacion'] ?? 'operacion'));
+
+            if ($status === 'confirmed') {
+                return [
+                    'type' => 'success',
+                    'title' => 'Listo, guardado',
+                    'message' => $operation === 'venta'
+                        ? 'Venta registrada correctamente.'
+                        : 'Operacion confirmada: '.$operation.'.',
+                ];
+            }
+
+            if ($status === 'requires_confirmation') {
+                return [
+                    'type' => 'pending',
+                    'title' => 'Lista para confirmar',
+                    'message' => 'Revise el resumen de '.$operation.' y espero tu confirmacion.',
+                ];
+            }
+
+            if ($status === 'blocked' || $status === 'error') {
+                return [
+                    'type' => 'warning',
+                    'title' => 'Necesito revisar algo',
+                    'message' => 'La operacion no se ejecuto. Mira el mensaje del asistente.',
+                ];
+            }
+        }
+
+        $reply = (string) ($response['reply'] ?? '');
+
+        if (str_contains($reply, 'cancele la operacion pendiente')) {
+            return [
+                'type' => 'success',
+                'title' => 'Operacion cancelada',
+                'message' => 'No se guardo ningun cambio.',
+            ];
+        }
+
+        if (($response['loop_steps'] ?? []) !== []) {
+            return [
+                'type' => str_contains($reply, 'Loop bloqueado') ? 'warning' : 'success',
+                'title' => str_contains($reply, 'Loop pausado') ? 'Proceso pausado' : 'Proceso actualizado',
+                'message' => str_contains($reply, 'Loop pausado')
+                    ? 'Hay una operacion esperando confirmacion.'
+                    : 'El agente termino de procesar los pasos posibles.',
+            ];
+        }
+
+        return null;
+    }
 };
 ?>
 
-<div class="mx-auto flex w-full max-w-[1500px] flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
-    <header class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div class="grid gap-0 lg:grid-cols-[minmax(0,1fr)_420px]">
-            <div class="relative border-b border-slate-200 p-5 sm:p-6 lg:border-b-0 lg:border-r">
-                <div class="absolute inset-0 opacity-[0.45]" style="background-image: linear-gradient(to right, rgba(15,23,42,.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(15,23,42,.05) 1px, transparent 1px); background-size: 28px 28px;"></div>
-                <div class="relative max-w-4xl">
-                    <div class="flex flex-wrap items-center gap-2">
-                        <span class="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-black uppercase tracking-[0.14em] text-emerald-800">
-                            <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-                            Asistente operativo
-                        </span>
-                        <span class="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600">
-                            {{ $loopMode ? 'Plan + ejecucion' : 'Chat normal' }}
-                        </span>
-                    </div>
+<div class="relative mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+    @if ($toast)
+        <div
+            wire:key="assistant-toast-{{ md5(json_encode($toast)) }}"
+            class="fixed right-4 top-4 z-50 w-[min(92vw,360px)] overflow-hidden rounded-2xl border border-white/80 bg-white/95 p-4 shadow-xl shadow-rose-950/10 ring-1 ring-rose-100 backdrop-blur"
+            x-data="{ show: true }"
+            x-init="setTimeout(() => show = false, 5200)"
+            x-show="show"
+            x-transition.opacity.duration.200ms
+        >
+            <div class="flex gap-3">
+                <div @class([
+                    'flex size-10 shrink-0 items-center justify-center rounded-2xl text-sm font-black text-white',
+                    'bg-emerald-500' => $toast['type'] === 'success',
+                    'bg-amber-500' => in_array($toast['type'], ['pending', 'warning'], true),
+                    'bg-rose-500' => $toast['type'] === 'error',
+                ])>
+                    {{ $toast['type'] === 'success' ? 'OK' : ($toast['type'] === 'error' ? '!' : '...') }}
+                </div>
+                <div class="min-w-0 flex-1">
+                    <p class="text-sm font-black text-slate-950">{{ $toast['title'] }}</p>
+                    <p class="mt-1 text-sm leading-5 text-slate-600">{{ $toast['message'] }}</p>
+                </div>
+                <button type="button" wire:click="dismissToast" class="flex size-8 items-center justify-center rounded-full text-slate-400 transition hover:bg-rose-50 hover:text-rose-600">
+                    x
+                </button>
+            </div>
+            <div class="mt-4 h-1 overflow-hidden rounded-full bg-rose-50">
+                <div @class([
+                    'h-full rounded-full',
+                    'bg-emerald-400' => $toast['type'] === 'success',
+                    'bg-amber-400' => in_array($toast['type'], ['pending', 'warning'], true),
+                    'bg-rose-400' => $toast['type'] === 'error',
+                ]) style="width: 68%"></div>
+            </div>
+        </div>
+    @endif
 
-                    <div class="mt-5 flex flex-col gap-3">
-                        <h1 class="max-w-3xl text-3xl font-black tracking-normal text-slate-950 sm:text-4xl lg:text-5xl">
-                            Consola IA de operaciones
-                        </h1>
-                        <p class="max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">
-                            Planea, consulta tools, prepara cambios y deja cada escritura esperando tu confirmacion. El historial vive en esta sesion para que no pierdas contexto mientras trabajas.
-                        </p>
+    <header class="rounded-3xl border border-white/80 bg-white/80 px-5 py-4 shadow-sm shadow-rose-950/5 ring-1 ring-rose-100/70 backdrop-blur sm:px-6">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div class="flex min-w-0 items-center gap-4">
+                <div class="godslove-mark size-12 text-base"><span>GL</span></div>
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <p class="text-xs font-black uppercase tracking-[0.16em] text-rose-500">GodsLove OS</p>
+                        <span class="h-1 w-1 rounded-full bg-rose-300"></span>
+                        <p class="text-xs font-bold text-slate-500">{{ $loopMode ? 'Plan + ejecucion' : 'Chat directo' }}</p>
                     </div>
+                    <h1 class="mt-1 text-2xl font-black tracking-normal text-slate-950 sm:text-3xl">Asistente de operaciones</h1>
                 </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-px bg-slate-200">
-                <div class="bg-white p-4">
-                    <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Mensajes</p>
-                    <p class="mt-2 text-3xl font-black text-slate-950">{{ $this->visibleMessageCount }}</p>
-                </div>
-                <div class="bg-white p-4">
-                    <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Pendientes</p>
-                    <p class="mt-2 text-3xl font-black text-amber-700">{{ count($pendingConfirmations) }}</p>
-                </div>
-                <div class="col-span-2 bg-white p-4">
-                    <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Modelo activo</p>
-                    <p class="mt-2 break-words text-sm font-black text-slate-950">{{ config('services.openrouter.model') }}</p>
-                </div>
+            <div class="flex flex-wrap items-center gap-2 text-xs font-bold text-slate-600">
+                <span class="rounded-full bg-rose-50 px-3 py-2 text-rose-700">{{ $this->visibleMessageCount }} mensajes</span>
+                <span class="rounded-full bg-amber-50 px-3 py-2 text-amber-700">{{ count($pendingConfirmations) }} pendientes</span>
+                <span class="max-w-full truncate rounded-full bg-white px-3 py-2 ring-1 ring-rose-100">{{ config('services.openrouter.model') }}</span>
             </div>
         </div>
     </header>
 
     @if (! config('services.openrouter.key'))
-        <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+        <div class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
             Falta OPENROUTER_API_KEY en el .env. La interfaz ya esta lista, pero no podra llamar al modelo hasta configurar la llave.
         </div>
     @endif
 
     @if ($error)
-        <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">
+        <div class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800">
             {{ $error }}
         </div>
     @endif
 
-    <div class="grid min-h-[calc(100vh-220px)] gap-5 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <section class="flex min-h-[720px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-            <div class="flex flex-col gap-3 border-b border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <main class="grid min-h-[calc(100vh-160px)] gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <section class="flex min-h-[720px] flex-col overflow-hidden rounded-3xl border border-white/80 bg-white/85 shadow-lg shadow-rose-950/5 ring-1 ring-rose-100/70 backdrop-blur">
+            <div class="flex flex-col gap-3 border-b border-rose-100/80 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                 <div class="flex items-center gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-md bg-slate-950 text-sm font-black text-white">IA</div>
+                    <div class="flex size-10 items-center justify-center rounded-2xl bg-rose-500 text-sm font-black text-white shadow-sm shadow-rose-900/20">IA</div>
                     <div>
-                        <h2 class="text-base font-black text-slate-950">Historial operativo</h2>
-                        <p class="text-xs font-semibold text-slate-500">{{ $this->visibleMessageCount }} mensajes visibles</p>
+                        <h2 class="text-base font-black text-slate-950">Ventana de trabajo</h2>
+                        <p class="text-xs font-semibold text-slate-500">Operaciones con confirmacion segura</p>
                     </div>
                 </div>
-                <div class="flex flex-wrap gap-2">
-                    <span @class([
-                        'rounded-md px-3 py-1.5 text-xs font-black',
-                        'bg-emerald-100 text-emerald-800' => $loopMode,
-                        'bg-slate-100 text-slate-700' => ! $loopMode,
-                    ])>
-                        {{ $loopMode ? 'Loop activo' : 'Chat directo' }}
-                    </span>
-                    <button type="button" wire:click="limpiar" class="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-black text-slate-700 transition hover:border-slate-500 hover:bg-slate-50">
+                <div class="flex flex-wrap items-center gap-2">
+                    <label class="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-2 text-xs font-black text-slate-700">
+                        <input type="checkbox" wire:model.live="loopMode" class="rounded border-slate-300 text-rose-500 focus:ring-rose-400">
+                        Loop
+                    </label>
+                    <button type="button" wire:click="limpiar" class="rounded-full bg-white px-3 py-2 text-xs font-black text-slate-600 ring-1 ring-rose-100 transition hover:bg-rose-50 hover:text-rose-700">
                         Limpiar
                     </button>
                 </div>
             </div>
 
-            <div class="flex-1 overflow-y-auto bg-[#f8fafc]">
-                <div class="mx-auto flex w-full max-w-5xl flex-col gap-5 p-4 sm:p-6">
-                @foreach ($messages as $index => $message)
-                    @continue($message['hidden'] ?? false)
-                    @continue(($message['role'] ?? '') === 'tool')
-                    @continue(($message['content'] ?? '') === null)
+            <div class="flex-1 overflow-y-auto bg-gradient-to-b from-rose-50/45 via-white to-emerald-50/30">
+                <div class="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:px-6">
+                    @foreach ($messages as $index => $message)
+                        @continue($message['hidden'] ?? false)
+                        @continue(($message['role'] ?? '') === 'tool')
+                        @continue(($message['content'] ?? '') === null)
 
-                    @php
-                        $isUser = ($message['role'] ?? '') === 'user';
-                    @endphp
+                        @php
+                            $isUser = ($message['role'] ?? '') === 'user';
+                        @endphp
 
-                    <article wire:key="assistant-message-{{ $index }}" @class(['grid gap-3', 'grid-cols-[1fr_36px]' => $isUser, 'grid-cols-[36px_1fr]' => ! $isUser])>
-                        @if (! $isUser)
-                            <div class="mt-6 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-sm font-black text-white shadow-sm shadow-emerald-900/20">
-                                IA
+                        <article wire:key="assistant-message-{{ $index }}" @class(['flex gap-3', 'justify-end' => $isUser])>
+                            @if (! $isUser)
+                                <div class="mt-1 flex size-9 shrink-0 items-center justify-center rounded-2xl bg-rose-500 text-xs font-black text-white shadow-sm shadow-rose-900/20">
+                                    GL
+                                </div>
+                            @endif
+
+                            <div @class(['min-w-0 max-w-[820px]', 'text-right' => $isUser])>
+                                <div @class(['mb-1 flex items-center gap-2 text-xs font-bold text-slate-400', 'justify-end' => $isUser])>
+                                    <span>{{ $isUser ? 'Tu' : 'GodsLove AI' }}</span>
+                                    <span>#{{ $index + 1 }}</span>
+                                </div>
+                                <div
+                                    @class([
+                                        'whitespace-pre-wrap px-4 py-3 text-sm leading-6 shadow-sm sm:px-5',
+                                        'rounded-3xl rounded-tr-md bg-slate-950 text-white shadow-slate-900/10' => $isUser,
+                                        'rounded-3xl rounded-tl-md border border-rose-100 bg-white text-slate-800' => ! $isUser,
+                                    ])
+                                >{{ (string) $message['content'] }}</div>
                             </div>
-                        @endif
 
-                        <div @class(['min-w-0 space-y-2', 'text-right' => $isUser])>
-                            <div @class(['flex items-center gap-2 text-xs font-black text-slate-500', 'justify-end' => $isUser])>
-                                <span class="rounded-md bg-white px-2 py-1 ring-1 ring-slate-200">{{ $isUser ? 'Tu' : 'Operador IA' }}</span>
-                                <span class="font-semibold text-slate-400">#{{ $index + 1 }}</span>
+                            @if ($isUser)
+                                <div class="mt-1 flex size-9 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-xs font-black text-white">
+                                    TU
+                                </div>
+                            @endif
+                        </article>
+                    @endforeach
+
+                    <div wire:loading.flex wire:target="enviar" class="items-start gap-3">
+                        <div class="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-rose-500 text-xs font-black text-white">GL</div>
+                        <div class="w-full max-w-lg rounded-3xl rounded-tl-md border border-rose-100 bg-white px-5 py-4 shadow-sm">
+                            <p class="text-sm font-black text-slate-900">Pensando con tools seguras</p>
+                            <div class="mt-3 flex gap-1.5">
+                                <span class="size-2 rounded-full bg-rose-300"></span>
+                                <span class="size-2 rounded-full bg-amber-300"></span>
+                                <span class="size-2 rounded-full bg-emerald-300"></span>
                             </div>
-                            <div
-                                @class([
-                                    'whitespace-pre-wrap rounded-lg px-4 py-3 text-sm leading-6 shadow-sm sm:px-5 sm:py-4',
-                                    'ml-auto max-w-[760px] bg-slate-950 text-white shadow-slate-900/10' => $isUser,
-                                    'max-w-[860px] border border-slate-200 bg-white text-slate-800' => ! $isUser,
-                                ])
-                            >{{ (string) $message['content'] }}</div>
-                        </div>
-
-                        @if ($isUser)
-                            <div class="mt-6 flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-slate-950 text-sm font-black text-white shadow-sm">
-                                TU
-                            </div>
-                        @endif
-                    </article>
-                @endforeach
-
-                <div wire:loading.flex wire:target="enviar" class="justify-start gap-3">
-                    <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-sm font-black text-white">
-                        IA
-                    </div>
-                    <div class="w-full max-w-xl rounded-lg border border-emerald-200 bg-white p-4 shadow-sm">
-                        <div class="flex items-center justify-between gap-3">
-                            <p class="text-sm font-black text-emerald-900">Consultando modelo y herramientas</p>
-                            <span class="rounded-md bg-emerald-50 px-2 py-1 text-xs font-black text-emerald-700">activo</span>
-                        </div>
-                        <div class="mt-3 grid gap-2">
-                            <div class="h-2 w-11/12 rounded-full bg-emerald-100"></div>
-                            <div class="h-2 w-8/12 rounded-full bg-slate-100"></div>
-                            <div class="h-2 w-10/12 rounded-full bg-slate-100"></div>
                         </div>
                     </div>
-                </div>
                 </div>
             </div>
 
-            <form wire:submit="enviar" class="border-t border-slate-200 bg-white p-4 sm:p-5">
-                <div class="mx-auto flex w-full max-w-5xl flex-col gap-3">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                        <label class="inline-flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-black text-slate-800">
-                            <input type="checkbox" wire:model.live="loopMode" class="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
-                            Planear y ejecutar
-                        </label>
-                        <p class="text-xs font-semibold text-slate-500">
-                            {{ $loopMode ? 'Maximo 6 pasos; pausa automatica con confirmation_token.' : 'Modo directo: consulta o prepara una sola respuesta.' }}
-                        </p>
-                    </div>
+            <form wire:submit="enviar" class="border-t border-rose-100 bg-white/95 p-4 sm:p-5">
+                <div class="mx-auto flex w-full max-w-4xl flex-col gap-3">
                     <textarea
                         wire:model="prompt"
                         rows="3"
-                        class="min-h-28 w-full resize-none rounded-lg border-slate-300 bg-slate-50 text-sm leading-6 shadow-inner focus:border-emerald-500 focus:bg-white focus:ring-emerald-500"
-                        placeholder="Ej. Da de alta azucar morena con 5 kg, minimo 1 kg y costo 22 pesos"
+                        class="min-h-24 w-full resize-none rounded-3xl border-rose-100 bg-rose-50/40 px-4 py-4 text-sm leading-6 shadow-inner shadow-rose-950/5 focus:border-rose-300 focus:bg-white focus:ring-rose-200"
+                        placeholder="Ej. registra una venta de 2 conos sencillos en efectivo"
                     ></textarea>
                     <div class="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <p class="text-xs font-medium text-slate-500">Las escrituras quedan preparadas; tu confirmacion guarda los cambios.</p>
-                        <button type="submit" class="inline-flex items-center justify-center rounded-md bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60" wire:loading.attr="disabled" wire:target="enviar">
-                            {{ $loopMode ? 'Ejecutar plan' : 'Enviar mensaje' }}
+                        <p class="text-xs font-medium text-slate-500">{{ $loopMode ? 'El loop se pausa si hay una operacion por confirmar.' : 'Las escrituras se preparan primero; confirmar guarda.' }}</p>
+                        <button type="submit" class="inline-flex items-center justify-center rounded-full bg-rose-500 px-5 py-3 text-sm font-black text-white shadow-sm shadow-rose-900/20 transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60" wire:loading.attr="disabled" wire:target="enviar">
+                            {{ $loopMode ? 'Ejecutar plan' : 'Enviar' }}
                         </button>
                     </div>
                 </div>
             </form>
         </section>
 
-        <aside class="grid content-start gap-4">
-            <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div class="border-b border-slate-200 bg-slate-950 px-4 py-4 text-white">
-                    <p class="text-xs font-black uppercase tracking-[0.14em] text-emerald-300">Estado del agente</p>
-                    <h2 class="mt-1 text-lg font-black">Panel de control</h2>
+        <aside class="flex flex-col gap-4">
+            <section class="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-sm shadow-rose-950/5 ring-1 ring-rose-100/70 backdrop-blur">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <p class="text-xs font-black uppercase tracking-[0.14em] text-rose-500">Estado</p>
+                        <h2 class="mt-1 text-lg font-black text-slate-950">{{ count($pendingConfirmations) > 0 ? 'Esperando confirmacion' : 'Listo para operar' }}</h2>
+                    </div>
+                    <div @class([
+                        'size-3 rounded-full',
+                        'bg-amber-400' => count($pendingConfirmations) > 0,
+                        'bg-emerald-400' => count($pendingConfirmations) === 0,
+                    ])></div>
                 </div>
-                <div class="grid gap-px bg-slate-200">
-                    <div class="bg-white px-4 py-3">
-                        <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Modo</p>
-                        <p class="mt-1 text-sm font-black text-slate-950">{{ $loopMode ? 'Plan + ejecucion' : 'Chat normal' }}</p>
+                <div class="mt-4 grid grid-cols-2 gap-2">
+                    <div class="rounded-2xl bg-rose-50 p-3">
+                        <p class="text-xs font-bold text-rose-700">Mensajes</p>
+                        <p class="mt-1 text-2xl font-black text-slate-950">{{ $this->visibleMessageCount }}</p>
                     </div>
-                    <div class="bg-white px-4 py-3">
-                        <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Modelo</p>
-                        <p class="mt-1 break-words text-sm font-black text-slate-950">{{ config('services.openrouter.model') }}</p>
-                    </div>
-                    <div class="grid grid-cols-2 gap-px">
-                        <div class="bg-white px-4 py-3">
-                            <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Mensajes</p>
-                            <p class="mt-1 text-2xl font-black text-slate-950">{{ $this->visibleMessageCount }}</p>
-                        </div>
-                        <div class="bg-white px-4 py-3">
-                            <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Pendientes</p>
-                            <p class="mt-1 text-2xl font-black text-amber-700">{{ count($pendingConfirmations) }}</p>
-                        </div>
+                    <div class="rounded-2xl bg-amber-50 p-3">
+                        <p class="text-xs font-bold text-amber-700">Pendientes</p>
+                        <p class="mt-1 text-2xl font-black text-slate-950">{{ count($pendingConfirmations) }}</p>
                     </div>
                 </div>
             </section>
 
             @if ($lastLoopSteps !== [])
-                <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <section class="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-sm ring-1 ring-rose-100/70">
                     <div class="flex items-center justify-between gap-3">
-                        <h2 class="text-sm font-black text-slate-950">Ejecucion del loop</h2>
-                        <span class="rounded-md bg-emerald-50 px-2 py-1 text-xs font-black text-emerald-700">{{ count($lastLoopSteps) }} pasos</span>
+                        <h2 class="text-sm font-black text-slate-950">Proceso</h2>
+                        <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700">{{ count($lastLoopSteps) }} pasos</span>
                     </div>
                     <div class="mt-4 space-y-3">
                         @foreach ($lastLoopSteps as $loopIndex => $step)
-                            <div wire:key="loop-step-{{ $loopIndex }}" class="border-l-2 border-slate-300 pl-3">
+                            <div wire:key="loop-step-{{ $loopIndex }}" class="rounded-2xl bg-slate-50 px-3 py-3">
                                 <div class="flex items-center justify-between gap-3">
-                                    <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">
-                                        {{ $step['tipo'] ?? 'paso' }} {{ $loopIndex + 1 }}
-                                    </p>
+                                    <p class="text-xs font-black uppercase tracking-[0.12em] text-slate-500">{{ $step['tipo'] ?? 'paso' }}</p>
                                     <span @class([
                                         'rounded-full px-2 py-1 text-xs font-black',
                                         'bg-emerald-100 text-emerald-800' => ($step['estado'] ?? '') === 'completed',
                                         'bg-amber-100 text-amber-800' => ($step['estado'] ?? '') === 'waiting_confirmation',
-                                        'bg-red-100 text-red-800' => ($step['estado'] ?? '') === 'blocked',
+                                        'bg-rose-100 text-rose-800' => ($step['estado'] ?? '') === 'blocked',
                                         'bg-slate-200 text-slate-700' => ! in_array(($step['estado'] ?? ''), ['completed', 'waiting_confirmation', 'blocked'], true),
-                                    ])>
-                                        {{ $step['estado'] ?? 'running' }}
-                                    </span>
+                                    ])>{{ $step['estado'] ?? 'running' }}</span>
                                 </div>
-                                <p class="mt-2 line-clamp-4 text-xs leading-5 text-slate-600">
-                                    {{ $step['resumen'] ?? '' }}
-                                </p>
+                                <p class="mt-2 line-clamp-4 text-xs leading-5 text-slate-600">{{ $step['resumen'] ?? '' }}</p>
                             </div>
                         @endforeach
                     </div>
                 </section>
             @endif
 
-            <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <h2 class="text-sm font-black text-slate-950">Comandos rapidos</h2>
-                <div class="mt-3 grid gap-2">
+            <section class="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-sm ring-1 ring-rose-100/70">
+                <h2 class="text-sm font-black text-slate-950">Atajos</h2>
+                <div class="mt-3 flex flex-col gap-2">
                     @foreach ([
+                        'registra una venta de 2 conos sencillos en efectivo',
                         'Que inventario esta bajo?',
-                        'Busca productos de cono',
                         'Dame el resumen de caja',
                         'Prepara abrir caja con 500 pesos',
-                        'Da de alta azucar morena con 5 kg, minimo 1 kg y costo 22 pesos',
                     ] as $example)
                         <button
                             type="button"
                             wire:key="assistant-shortcut-{{ md5($example) }}"
                             wire:click="usarEjemplo(@js($example))"
-                            class="rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm font-semibold leading-5 text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50"
+                            class="rounded-2xl bg-white px-3 py-2.5 text-left text-sm font-semibold leading-5 text-slate-700 ring-1 ring-rose-100 transition hover:bg-rose-50 hover:text-rose-700"
                         >
                             {{ $example }}
                         </button>
@@ -383,36 +457,21 @@ new class extends Component
                 </div>
             </section>
 
-            <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <h2 class="text-sm font-black text-slate-950">Herramientas</h2>
-                <div class="mt-3 grid gap-2 text-sm text-slate-700">
-                    @foreach (['Inventario y alertas', 'Productos, precios y recetas', 'Categorias e insumos', 'Caja abierta y cierre', 'Ventas con confirmacion'] as $toolLabel)
-                        <div wire:key="tool-label-{{ $toolLabel }}" class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-semibold">
-                            {{ $toolLabel }}
-                        </div>
-                    @endforeach
-                </div>
-            </section>
-
-            <section class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <h2 class="text-sm font-black text-slate-950">Ultimas tools</h2>
+            <section class="rounded-3xl border border-white/80 bg-white/80 p-4 shadow-sm ring-1 ring-rose-100/70">
+                <h2 class="text-sm font-black text-slate-950">Ultima actividad</h2>
                 @if ($lastToolResults === [])
-                    <p class="mt-3 text-sm leading-6 text-slate-500">
-                        Cuando el modelo use una tool, aqui veras el nombre y el estado devuelto.
-                    </p>
+                    <p class="mt-3 text-sm leading-6 text-slate-500">Aqui aparece la operacion cuando una tool prepara, confirma o bloquea algo.</p>
                 @else
-                    <div class="mt-3 space-y-2">
+                    <div class="mt-3 flex flex-col gap-2">
                         @foreach ($lastToolResults as $toolIndex => $tool)
-                            <div wire:key="tool-result-{{ $toolIndex }}" class="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                <p class="text-sm font-bold text-slate-900">{{ $tool['name'] }}</p>
-                                <p class="mt-1 text-xs font-semibold text-slate-500">
-                                    {{ data_get($tool, 'result.status', data_get($tool, 'result.operacion', 'consulta')) }}
-                                </p>
+                            <div wire:key="tool-result-{{ $toolIndex }}" class="rounded-2xl bg-slate-50 px-3 py-2.5">
+                                <p class="text-sm font-black text-slate-900">{{ data_get($tool, 'result.operacion', $tool['name']) }}</p>
+                                <p class="mt-1 text-xs font-semibold text-slate-500">{{ data_get($tool, 'result.status', 'consulta') }}</p>
                             </div>
                         @endforeach
                     </div>
                 @endif
             </section>
         </aside>
-    </div>
+    </main>
 </div>
