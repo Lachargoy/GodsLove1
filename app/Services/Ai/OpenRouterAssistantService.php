@@ -5,6 +5,7 @@ namespace App\Services\Ai;
 use App\Ai\Agents\IntentParserAgent;
 use App\Ai\Agents\OperationsAgent;
 use App\Models\Producto;
+use App\Models\ProductOptionItem;
 use App\Models\User;
 use App\Services\Mcp\OperationsAssistantService;
 use Illuminate\Support\Str;
@@ -15,6 +16,8 @@ use RuntimeException;
 class OpenRouterAssistantService
 {
     private const int LoopStepLimit = 6;
+
+    private const string IncompleteSaleOperation = 'venta_incompleta';
 
     public function __construct(
         private readonly OperationsAssistantService $operations,
@@ -52,6 +55,14 @@ class OpenRouterAssistantService
 
         if ($this->isConfirmationIntent($prompt) && $pendingConfirmations !== []) {
             return $this->confirmFromPending($visibleHistory, $pendingConfirmations);
+        }
+
+        if ($this->hasIncompleteSale($pendingConfirmations)) {
+            $completedSale = $this->completeIncompleteSale($visibleHistory, $prompt, $pendingConfirmations);
+
+            if ($completedSale !== null) {
+                return $completedSale;
+            }
         }
 
         $intent = $this->parseIntent($prompt, $previousMessages);
@@ -134,6 +145,22 @@ class OpenRouterAssistantService
                     'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
                 ]],
             ];
+        }
+
+        if ($this->hasIncompleteSale($pendingConfirmations)) {
+            $result = $this->completeIncompleteSale($visibleHistory, $goal, $pendingConfirmations);
+
+            if ($result !== null) {
+                return [
+                    ...$result,
+                    'loop_steps' => [[
+                        'tipo' => 'sale_flow',
+                        'estado' => data_get($result, 'tool_results.0.result.status') === 'requires_confirmation' ? 'waiting_confirmation' : 'blocked',
+                        'resumen' => $result['reply'],
+                        'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
+                    ]],
+                ];
+            }
         }
 
         $intent = $this->parseIntent($goal, array_slice($visibleHistory, 0, $lastUserIndex));
@@ -609,6 +636,15 @@ PROMPT;
         }
 
         $confirmation = array_values($pendingConfirmations)[0];
+        if (($confirmation['operation'] ?? null) === self::IncompleteSaleOperation) {
+            return $this->directReply(
+                $messages,
+                $this->incompleteSaleReply($confirmation),
+                [],
+                $pendingConfirmations,
+            );
+        }
+
         $token = (string) ($confirmation['confirmation_token'] ?? '');
         $operation = (string) ($confirmation['operation'] ?? '');
         $result = $this->confirmOperation($operation, $token);
@@ -675,6 +711,10 @@ PROMPT;
                 ->implode("\n");
 
             return "Operacion pendiente: venta.\n{$lines}\nTotal: $".number_format((float) data_get($summary, 'total', 0), 2);
+        }
+
+        if ($operation === self::IncompleteSaleOperation) {
+            return $this->incompleteSaleReply($pending);
         }
 
         return 'Operacion pendiente: '.$operation.'.';
@@ -749,12 +789,274 @@ PROMPT;
             );
         }
 
+        if ($this->isMissingConfigurableOptions($result)) {
+            $pending = $this->incompleteSalePending($saleItems, $paymentMethod, $result);
+
+            return $this->directReply(
+                $messages,
+                $this->incompleteSaleReply($pending),
+                $toolResults,
+                [$pending],
+            );
+        }
+
         return $this->directReply(
             $messages,
             $this->blockedSaleReply($result),
             $toolResults,
             [],
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function isMissingConfigurableOptions(array $result): bool
+    {
+        if (($result['status'] ?? null) !== 'blocked') {
+            return false;
+        }
+
+        return collect($result['errores'] ?? data_get($result, 'contexto.errores', []))
+            ->contains(fn (string $error): bool => str_contains($this->normalizeText($error), 'requiere al menos'));
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $saleItems
+     * @param  array<string, mixed>  $result
+     * @return array<string, mixed>
+     */
+    private function incompleteSalePending(array $saleItems, string $paymentMethod, array $result): array
+    {
+        $summary = [
+            'items' => collect($saleItems)
+                ->map(function (array $item): array {
+                    $product = Producto::query()->find($item['producto_id'] ?? null);
+
+                    return [
+                        'producto_id' => $item['producto_id'] ?? null,
+                        'nombre' => $product?->nombre ?? 'producto',
+                        'cantidad' => (float) ($item['cantidad'] ?? 0),
+                        'selected_options' => $item['selected_options'] ?? [],
+                    ];
+                })
+                ->all(),
+            'metodo_pago' => $paymentMethod,
+            'errores' => $result['errores'] ?? data_get($result, 'contexto.errores', []),
+        ];
+
+        return [
+            'operation' => self::IncompleteSaleOperation,
+            'draft_key' => 'venta-incompleta-'.hash('sha256', json_encode($summary, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)),
+            'items' => $saleItems,
+            'payment_method' => $paymentMethod,
+            'summary' => $summary,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $pending
+     */
+    private function incompleteSaleReply(array $pending): string
+    {
+        $lines = collect(data_get($pending, 'summary.items', []))
+            ->map(fn (array $item): string => '- '.number_format((float) ($item['cantidad'] ?? 0), 2).' x '.($item['nombre'] ?? 'producto'))
+            ->implode("\n");
+
+        $missing = $this->missingOptionsText($pending);
+
+        return "Ya tengo la venta en borrador, sin guardar todavia:\n\n{$lines}\nMetodo: ".($pending['payment_method'] ?? 'efectivo')."\n\nMe falta {$missing}. Dime algo como `los 2 de nuez` o `uno de fresa y uno de vainilla`.";
+    }
+
+    /**
+     * @param  array<string, mixed>  $pending
+     */
+    private function missingOptionsText(array $pending): string
+    {
+        $groups = collect($pending['items'] ?? [])
+            ->flatMap(function (array $item): array {
+                $product = Producto::query()
+                    ->with('productOptionGroups')
+                    ->find($item['producto_id'] ?? null);
+
+                if (! $product instanceof Producto) {
+                    return [];
+                }
+
+                $selectedOptions = $item['selected_options'] ?? [];
+
+                return $product->productOptionGroups
+                    ->filter(function ($group) use ($selectedOptions): bool {
+                        $selectedQuantity = array_sum(array_map('floatval', $selectedOptions[$group->id] ?? []));
+                        $minQuantity = (float) ($group->min_quantity ?? $group->required_quantity);
+
+                        return round($selectedQuantity, 3) < round($minQuantity, 3);
+                    })
+                    ->map(fn ($group): string => 'el grupo '.$group->name)
+                    ->all();
+            })
+            ->unique()
+            ->values()
+            ->implode(', ');
+
+        return $groups !== '' ? $groups : 'las opciones del producto';
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $pendingConfirmations
+     */
+    private function hasIncompleteSale(array $pendingConfirmations): bool
+    {
+        return count($pendingConfirmations) === 1
+            && (array_values($pendingConfirmations)[0]['operation'] ?? null) === self::IncompleteSaleOperation;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $messages
+     * @param  array<int, array<string, mixed>>  $pendingConfirmations
+     * @return array<string, mixed>|null
+     */
+    private function completeIncompleteSale(array $messages, string $prompt, array $pendingConfirmations): ?array
+    {
+        $pending = array_values($pendingConfirmations)[0] ?? null;
+
+        if (! is_array($pending) || ($pending['operation'] ?? null) !== self::IncompleteSaleOperation) {
+            return null;
+        }
+
+        $saleItems = $this->saleItemsWithOptionsFromPrompt($pending['items'] ?? [], $prompt);
+
+        if ($saleItems === null) {
+            return $this->directReply(
+                $messages,
+                $this->incompleteSaleReply($pending),
+                [],
+                $pendingConfirmations,
+            );
+        }
+
+        $paymentMethod = (string) ($pending['payment_method'] ?? 'efectivo');
+        $result = $this->operations->prepareSale($saleItems, 0, $paymentMethod);
+        $toolResults = [[
+            'name' => 'operacion_godslove',
+            'result' => $result,
+        ]];
+
+        if (($result['status'] ?? null) === 'requires_confirmation') {
+            return $this->directReply(
+                $messages,
+                "Perfecto, tome las opciones que me diste.\n\n".$this->preparedSaleReply($result),
+                $toolResults,
+                $this->mergePendingConfirmations([], $toolResults),
+            );
+        }
+
+        if ($this->isMissingConfigurableOptions($result)) {
+            $newPending = $this->incompleteSalePending($saleItems, $paymentMethod, $result);
+
+            return $this->directReply(
+                $messages,
+                $this->incompleteSaleReply($newPending),
+                $toolResults,
+                [$newPending],
+            );
+        }
+
+        return $this->directReply(
+            $messages,
+            $this->blockedSaleReply($result),
+            $toolResults,
+            [],
+        );
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $saleItems
+     * @return array<int, array<string, mixed>>|null
+     */
+    private function saleItemsWithOptionsFromPrompt(array $saleItems, string $prompt): ?array
+    {
+        $matchedAnyOption = false;
+
+        $items = collect($saleItems)
+            ->map(function (array $item) use ($prompt, &$matchedAnyOption): array {
+                $product = Producto::query()
+                    ->with('productOptionGroups.optionItems.inventoryItem')
+                    ->find($item['producto_id'] ?? null);
+
+                if (! $product instanceof Producto || $product->product_type !== 'configurable') {
+                    return $item;
+                }
+
+                $selectedOptions = $item['selected_options'] ?? [];
+
+                foreach ($product->productOptionGroups as $group) {
+                    $selectedQuantity = array_sum(array_map('floatval', $selectedOptions[$group->id] ?? []));
+                    $minQuantity = (float) ($group->min_quantity ?? $group->required_quantity);
+
+                    if (round($selectedQuantity, 3) >= round($minQuantity, 3)) {
+                        continue;
+                    }
+
+                    $matches = $group->optionItems
+                        ->where('is_active', true)
+                        ->filter(fn (ProductOptionItem $option): bool => $this->optionMatchesPrompt($option, $prompt))
+                        ->values();
+
+                    if ($matches->isEmpty()) {
+                        continue;
+                    }
+
+                    $matchedAnyOption = true;
+                    $remainingQuantity = max(1.0, round($minQuantity - $selectedQuantity, 3));
+                    $selectedOptions[$group->id] ??= [];
+
+                    if ($matches->count() === 1) {
+                        $option = $matches->first();
+                        $selectedOptions[$group->id][$option->id] = round($remainingQuantity, 3);
+
+                        continue;
+                    }
+
+                    foreach ($matches as $option) {
+                        if ($remainingQuantity <= 0) {
+                            break;
+                        }
+
+                        $selectedOptions[$group->id][$option->id] = 1;
+                        $remainingQuantity--;
+                    }
+                }
+
+                return [
+                    ...$item,
+                    'selected_options' => $selectedOptions,
+                ];
+            })
+            ->all();
+
+        return $matchedAnyOption ? $items : null;
+    }
+
+    private function optionMatchesPrompt(ProductOptionItem $option, string $prompt): bool
+    {
+        $inventoryName = $this->normalizeText((string) $option->inventoryItem?->name);
+        $promptTokens = collect(explode(' ', $this->normalizeText($prompt)))
+            ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
+            ->map(fn (string $token): string => $this->singularToken($token))
+            ->values();
+
+        if ($inventoryName === '' || $promptTokens->isEmpty()) {
+            return false;
+        }
+
+        $optionTokens = collect(explode(' ', $inventoryName))
+            ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
+            ->map(fn (string $token): string => $this->singularToken($token))
+            ->values();
+
+        return $optionTokens
+            ->contains(fn (string $token): bool => $promptTokens->contains($token));
     }
 
     /**
@@ -956,7 +1258,7 @@ PROMPT;
             return false;
         }
 
-        return preg_match('/\b(si|confirmo|confirma|dale|ok|va|hazlo|adelante|autorizo|registralo|registrala|guardalo|guardala)\b/', $normalized) === 1;
+        return preg_match('/\b(si|confirmo|confirma|confirmar|dale|ok|va|hazlo|adelante|autorizo|registralo|registrala|guardalo|guardala)\b/', $normalized) === 1;
     }
 
     private function isCancellationIntent(string $message): bool
@@ -1032,7 +1334,7 @@ PROMPT;
     private function mergePendingConfirmations(array $existing, array $toolResults): array
     {
         $pending = collect($existing)
-            ->keyBy('confirmation_token');
+            ->keyBy(fn (array $confirmation): string => (string) ($confirmation['confirmation_token'] ?? $confirmation['draft_key'] ?? $confirmation['operation'] ?? 'pending'));
 
         foreach ($toolResults as $toolResult) {
             $result = $toolResult['result'] ?? [];

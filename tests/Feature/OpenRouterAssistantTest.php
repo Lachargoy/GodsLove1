@@ -2,9 +2,15 @@
 
 use App\Ai\Agents\IntentParserAgent;
 use App\Ai\Agents\OperationsAgent;
+use App\Models\CategoriaProducto;
+use App\Models\Category;
 use App\Models\CorteCaja;
 use App\Models\Insumo;
+use App\Models\InventoryItem;
 use App\Models\Producto;
+use App\Models\ProductOptionGroup;
+use App\Models\ProductOptionItem;
+use App\Models\Unit;
 use App\Models\User;
 use App\Models\Venta;
 use App\Services\Ai\OpenRouterAssistantService;
@@ -377,6 +383,125 @@ test('assistant prepares straightforward sales without relying on the model', fu
         ->and($response['tool_results'][0]['result']['operacion'])->toBe('venta')
         ->and($response['pending_confirmations'][0]['operation'])->toBe('venta')
         ->and(Venta::query()->count())->toBe(0);
+
+    IntentParserAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'registra una venta'));
+    OperationsAgent::assertNeverPrompted();
+});
+
+test('assistant keeps an incomplete configurable sale and completes it with the next flavor message', function () {
+    IntentParserAgent::fake([
+        [
+            'intent' => 'registrar_venta',
+            'confidence' => 0.95,
+            'items' => [
+                [
+                    'producto_nombre' => 'Cono sencillo',
+                    'cantidad' => 2,
+                    'selected_options' => [],
+                ],
+            ],
+            'metodo_pago' => 'efectivo',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+    ])->preventStrayPrompts();
+    OperationsAgent::fake([])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    CorteCaja::query()->create([
+        'user_id' => $user->id,
+        'fecha_apertura' => now(),
+        'monto_inicial' => 500,
+        'estado' => 'abierto',
+    ]);
+
+    $unit = Unit::query()->create([
+        'name' => 'litro',
+        'abbreviation' => 'L',
+        'allows_decimals' => true,
+    ]);
+
+    $category = Category::query()->create([
+        'name' => 'Sabores',
+        'type' => 'inventory_item',
+        'is_active' => true,
+    ]);
+
+    $legacyCategory = CategoriaProducto::query()->create([
+        'nombre' => 'Conos',
+        'activo' => true,
+    ]);
+
+    $nuez = InventoryItem::query()->create([
+        'category_id' => $category->id,
+        'unit_id' => $unit->id,
+        'name' => 'Nuez',
+        'current_stock' => 10,
+        'minimum_stock' => 1,
+        'average_cost' => 30,
+        'allows_decimals' => true,
+        'is_sellable' => false,
+        'is_consumable' => true,
+        'is_active' => true,
+    ]);
+
+    $product = Producto::query()->create([
+        'categoria_producto_id' => $legacyCategory->id,
+        'nombre' => 'Cono sencillo',
+        'descripcion' => 'Cono configurable para pruebas',
+        'precio_venta' => 25,
+        'costo_estimado' => 0,
+        'product_type' => 'configurable',
+        'activo' => true,
+    ]);
+
+    $group = ProductOptionGroup::query()->create([
+        'product_id' => $product->id,
+        'name' => 'Sabores',
+        'required_quantity' => 1,
+        'min_quantity' => 1,
+        'max_quantity' => 1,
+    ]);
+
+    ProductOptionItem::query()->create([
+        'product_option_group_id' => $group->id,
+        'inventory_item_id' => $nuez->id,
+        'quantity_per_selection' => 0.12,
+        'extra_price' => 0,
+        'is_active' => true,
+    ]);
+
+    $assistant = app(OpenRouterAssistantService::class);
+    $firstResponse = $assistant->respond([
+        ['role' => 'user', 'content' => 'registra una venta de 2 conos sencillos en efectivo'],
+    ], $user);
+
+    expect($firstResponse['reply'])->toContain('venta en borrador')
+        ->and($firstResponse['reply'])->toContain('Sabores')
+        ->and($firstResponse['pending_confirmations'][0]['operation'])->toBe('venta_incompleta')
+        ->and(Venta::query()->count())->toBe(0);
+
+    $secondResponse = $assistant->respond([
+        ...$firstResponse['messages'],
+        ['role' => 'user', 'content' => 'los 2 fueron de nuez'],
+    ], $user, $firstResponse['pending_confirmations']);
+
+    expect($secondResponse['reply'])->toContain('Venta preparada')
+        ->and($secondResponse['reply'])->toContain('Cono sencillo')
+        ->and($secondResponse['tool_results'][0]['result']['status'])->toBe('requires_confirmation')
+        ->and($secondResponse['pending_confirmations'][0]['operation'])->toBe('venta')
+        ->and(Venta::query()->count())->toBe(0);
+
+    $confirmed = $assistant->respond([
+        ...$secondResponse['messages'],
+        ['role' => 'user', 'content' => 'confirmar'],
+    ], $user, $secondResponse['pending_confirmations']);
+
+    expect($confirmed['reply'])->toContain('Venta confirmada')
+        ->and($confirmed['pending_confirmations'])->toBe([])
+        ->and(Venta::query()->count())->toBe(1);
 
     IntentParserAgent::assertPrompted(fn ($prompt): bool => str_contains($prompt->prompt, 'registra una venta'));
     OperationsAgent::assertNeverPrompted();
