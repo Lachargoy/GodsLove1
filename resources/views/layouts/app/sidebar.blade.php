@@ -55,7 +55,7 @@
 
             @if ($activeItem)
                 <div class="px-4 pb-4">
-                    <div class="rounded-2xl border border-rose-100 bg-white p-4 shadow-sm">
+                    <div class="rounded-[1.5rem] border border-white/80 bg-white/80 p-4 shadow-sm shadow-rose-950/5 ring-1 ring-rose-100/70 backdrop-blur">
                         <div class="flex items-start gap-3">
                             <span class="flex size-10 shrink-0 items-center justify-center rounded-xl text-white {{ $activeItem['accent'] }}">
                                 <flux:icon :icon="$activeItem['icon']" class="size-4" />
@@ -111,13 +111,13 @@
             <flux:spacer />
 
             <div class="px-4 pb-4">
-                <div class="rounded-2xl border border-rose-200 bg-[#fff8f3] p-4 text-slate-950 shadow-sm">
+                <div class="rounded-[1.5rem] border border-rose-200/80 bg-white/80 p-4 text-slate-950 shadow-sm shadow-rose-950/5 ring-1 ring-rose-100/70 backdrop-blur">
                     <div class="flex items-center justify-between gap-3">
                         <p class="text-xs font-black uppercase tracking-[0.22em] text-rose-500">Caja viva</p>
                         <span class="size-2 rounded-full bg-emerald-500 shadow-[0_0_0_4px_rgba(16,185,129,0.16)]"></span>
                     </div>
                     <p class="mt-2 text-sm leading-5 text-slate-600">Vende, descuenta inventario y revisa el cierre con el toque Godslove.</p>
-                    <a href="{{ route('ventas.punto') }}" wire:navigate class="mt-4 inline-flex w-full items-center justify-center rounded-xl bg-rose-500 px-3 py-2 text-xs font-black text-white transition hover:bg-rose-600">
+                    <a href="{{ route('ventas.punto') }}" wire:navigate class="mt-4 inline-flex w-full items-center justify-center rounded-full bg-rose-500 px-3 py-2 text-xs font-black text-white shadow-sm shadow-rose-900/15 transition hover:-translate-y-px hover:bg-rose-600">
                         Ir a vender
                     </a>
                 </div>

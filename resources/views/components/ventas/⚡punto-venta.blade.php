@@ -530,36 +530,36 @@ new class extends Component
 ?>
 <div
     x-data="{ cartOpen: false, summaryOpen: false, catalogOpen: true }"
-    class="relative -mx-4 min-h-screen bg-stone-100/70 px-4 pb-28 pt-1 xl:pb-8"
+    class="relative -mx-4 min-h-screen px-4 pb-28 pt-1 xl:pb-8"
     style="font-family: 'DM Sans', sans-serif;"
 >
     @if (session('success'))
-        <div class="mb-4 border-l-4 border-emerald-500 bg-white px-4 py-3 text-sm font-semibold text-emerald-800">
+        <div class="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-sm">
             {{ session('success') }}
         </div>
     @endif
 
     @if (session('error'))
-        <div class="mb-4 border-l-4 border-red-500 bg-white px-4 py-3 text-sm font-semibold text-red-800">
+        <div class="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 shadow-sm">
             {{ session('error') }}
         </div>
     @endif
 
     @if (! $this->cajaAbierta)
-        <div class="mb-4 border-l-4 border-amber-500 bg-white px-4 py-3 text-sm text-amber-900">
+        <div class="mb-4 rounded-[1.5rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <p class="font-semibold">Abre la caja del dia antes de vender</p>
                     <p class="mt-1 text-amber-800">Las ventas deben quedar ligadas al balance diario para que el corte cuadre.</p>
                 </div>
-                <a href="{{ route('caja.corte') }}" wire:navigate class="inline-flex items-center justify-center bg-amber-900 px-4 py-2 text-sm font-black text-white transition hover:bg-amber-800">
+                <a href="{{ route('caja.corte') }}" wire:navigate class="inline-flex items-center justify-center rounded-full bg-amber-900 px-4 py-2 text-sm font-black text-white transition hover:-translate-y-px hover:bg-amber-800">
                     Abrir caja
                 </a>
             </div>
         </div>
     @endif
 
-    <section class="mb-4 border border-stone-200 bg-white">
+    <section class="mb-4 overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/85 shadow-sm shadow-rose-950/5 ring-1 ring-rose-100/70 backdrop-blur">
         <button type="button" @click="summaryOpen = !summaryOpen" class="flex w-full items-center justify-between px-4 py-3 text-left xl:hidden">
             <div>
                 <p class="text-[11px] font-black uppercase tracking-[0.18em] text-stone-400">Total vendido hoy</p>
@@ -568,7 +568,7 @@ new class extends Component
             <span class="text-xs font-bold uppercase tracking-[0.16em] text-stone-400" x-text="summaryOpen ? 'Ocultar' : 'Ver'"></span>
         </button>
 
-        <div class="grid grid-cols-2 divide-x divide-y divide-stone-200 xl:grid-cols-4 xl:divide-y-0" :class="summaryOpen ? 'grid' : 'hidden xl:grid'">
+        <div class="grid grid-cols-2 divide-x divide-y divide-rose-100/80 xl:grid-cols-4 xl:divide-y-0" :class="summaryOpen ? 'grid' : 'hidden xl:grid'">
             <div class="px-5 py-4">
                 <p class="text-[11px] font-black uppercase tracking-[0.16em] text-stone-400">Total vendido hoy</p>
                 <p class="mt-2 text-2xl font-black text-stone-950" style="font-family: 'Nunito', sans-serif;">${{ number_format($this->totalVendidoHoy, 2) }}</p>
@@ -590,16 +590,16 @@ new class extends Component
         </div>
     </section>
 
-    <section class="overflow-hidden border border-stone-200 bg-white xl:grid xl:grid-cols-[minmax(0,1fr)_390px]">
-        <div class="min-w-0 xl:border-r xl:border-stone-200">
-            <header class="border-b border-stone-200 px-5 py-5 sm:px-6">
+    <section class="overflow-hidden rounded-[1.9rem] border border-white/80 bg-white/85 shadow-[0_24px_70px_-54px_rgba(190,18,60,0.45)] ring-1 ring-rose-100/70 backdrop-blur xl:grid xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div class="min-w-0 xl:border-r xl:border-rose-100">
+            <header class="border-b border-rose-100 px-5 py-5 sm:px-6">
                 <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                     <div>
                         <p class="text-[11px] font-black uppercase tracking-[0.18em] text-orange-500">Punto de venta</p>
                         <h1 class="mt-1 text-2xl font-black text-stone-950" style="font-family: 'Nunito', sans-serif;">Productos</h1>
                         <p class="mt-1 text-sm text-stone-500">Busca, filtra y agrega productos al carrito sin cambiar de pantalla.</p>
                     </div>
-                    <button type="button" wire:click="limpiarMenuVenta" class="w-fit border border-stone-200 px-4 py-2 text-sm font-bold text-stone-600 transition hover:bg-stone-50">
+                    <button type="button" wire:click="limpiarMenuVenta" class="w-fit rounded-full border border-rose-200 bg-white px-4 py-2 text-sm font-bold text-stone-600 transition hover:-translate-y-px hover:bg-rose-50">
                         Limpiar filtros
                     </button>
                 </div>
@@ -608,10 +608,10 @@ new class extends Component
                     <input
                         type="search"
                         wire:model.live.debounce.250ms="search"
-                        class="h-12 w-full border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-stone-500"
+                        class="h-12 w-full rounded-2xl border border-rose-100 bg-white px-4 text-sm font-semibold text-stone-900 outline-none transition placeholder:text-stone-400 focus:border-rose-300"
                         placeholder="Buscar producto"
                     >
-                    <select wire:model.live="categoria_producto_id" class="h-12 w-full border border-stone-200 bg-white px-4 text-sm font-semibold text-stone-700 outline-none transition focus:border-stone-500">
+                    <select wire:model.live="categoria_producto_id" class="h-12 w-full rounded-2xl border border-rose-100 bg-white px-4 text-sm font-semibold text-stone-700 outline-none transition focus:border-rose-300">
                         <option value="">Todas las categorias</option>
                         @foreach ($this->categorias as $categoria)
                             <option value="{{ $categoria->id }}">{{ $categoria->nombre }}</option>
@@ -620,11 +620,11 @@ new class extends Component
                 </div>
 
                 <div class="mt-4 flex gap-2 overflow-x-auto pb-1">
-                    <button type="button" wire:click="$set('categoria_producto_id', '')" class="shrink-0 rounded-full px-4 py-2 text-sm font-black transition {{ $categoria_producto_id === '' ? 'bg-stone-950 text-white' : 'border border-stone-200 text-stone-600 hover:bg-stone-50' }}">
+                    <button type="button" wire:click="$set('categoria_producto_id', '')" class="shrink-0 rounded-full px-4 py-2 text-sm font-black transition {{ $categoria_producto_id === '' ? 'bg-rose-500 text-white shadow-sm shadow-rose-900/15' : 'border border-rose-100 bg-white text-stone-600 hover:bg-rose-50' }}">
                         Todo
                     </button>
                     @foreach ($this->categorias as $categoria)
-                        <button type="button" wire:key="categoria-chip-{{ $categoria->id }}" wire:click="$set('categoria_producto_id', '{{ $categoria->id }}')" class="shrink-0 rounded-full px-4 py-2 text-sm font-black transition {{ $categoria_producto_id === (string) $categoria->id ? 'bg-stone-950 text-white' : 'border border-stone-200 text-stone-600 hover:bg-stone-50' }}">
+                        <button type="button" wire:key="categoria-chip-{{ $categoria->id }}" wire:click="$set('categoria_producto_id', '{{ $categoria->id }}')" class="shrink-0 rounded-full px-4 py-2 text-sm font-black transition {{ $categoria_producto_id === (string) $categoria->id ? 'bg-rose-500 text-white shadow-sm shadow-rose-900/15' : 'border border-rose-100 bg-white text-stone-600 hover:bg-rose-50' }}">
                             {{ $categoria->nombre }}
                         </button>
                     @endforeach
@@ -692,9 +692,9 @@ new class extends Component
                 </div>
             @endif
 
-            <div class="divide-y divide-stone-200">
+            <div class="divide-y divide-rose-50">
                 @forelse ($this->productos as $producto)
-                    <div wire:key="producto-venta-{{ $producto->id }}" class="grid gap-3 px-5 py-4 transition hover:bg-stone-50 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6">
+                    <div wire:key="producto-venta-{{ $producto->id }}" class="grid gap-3 px-5 py-4 transition hover:bg-rose-50/60 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6">
                         <div class="min-w-0">
                             <div class="flex flex-wrap items-center gap-2">
                                 <h3 class="min-w-0 truncate text-base font-black text-stone-950" style="font-family: 'Nunito', sans-serif;">{{ $producto->nombre }}</h3>
@@ -706,7 +706,7 @@ new class extends Component
                         </div>
                         <div class="flex items-center justify-between gap-4 sm:justify-end">
                             <p class="font-mono text-xl font-black text-stone-950">${{ number_format((float) $producto->precio_venta, 2) }}</p>
-                            <button type="button" wire:click="agregarProducto({{ $producto->id }})" class="bg-stone-950 px-4 py-2 text-sm font-black text-white transition hover:bg-stone-800">
+                            <button type="button" wire:click="agregarProducto({{ $producto->id }})" class="rounded-full bg-stone-950 px-4 py-2 text-sm font-black text-white transition hover:-translate-y-px hover:bg-stone-800">
                                 {{ $producto->product_type === 'configurable' ? 'Elegir' : 'Agregar' }}
                             </button>
                         </div>
@@ -717,9 +717,9 @@ new class extends Component
             </div>
         </div>
 
-        <aside class="bg-white">
+        <aside class="bg-rose-50/35">
             <div class="sticky top-0 xl:top-4">
-                <header class="border-b border-stone-200 px-5 py-5">
+                <header class="border-b border-rose-100 px-5 py-5">
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-[11px] font-black uppercase tracking-[0.18em] text-stone-400">Cobro</p>
@@ -735,7 +735,7 @@ new class extends Component
                     <div class="mx-5 mt-4 border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{{ $message }}</div>
                 @enderror
 
-                <div class="max-h-[38vh] divide-y divide-stone-200 overflow-y-auto xl:max-h-[42vh]">
+                <div class="max-h-[38vh] divide-y divide-rose-100 overflow-y-auto xl:max-h-[42vh]">
                     @forelse ($carrito as $item)
                         <div wire:key="carrito-{{ $item['key'] ?? $item['producto_id'] }}" class="px-5 py-4">
                             <div class="flex items-start justify-between gap-3">
@@ -761,15 +761,15 @@ new class extends Component
                     @endforelse
                 </div>
 
-                <div class="border-t border-stone-200 px-5 py-5">
+                <div class="border-t border-rose-100 px-5 py-5">
                     <div class="grid grid-cols-2 gap-3">
                         <label class="block">
                             <span class="text-xs font-bold text-stone-500">Descuento</span>
-                            <input type="number" step="0.01" wire:model.live="descuento" class="mt-1 h-11 w-full border border-stone-200 px-3 text-sm font-semibold outline-none focus:border-stone-500">
+                            <input type="number" step="0.01" wire:model.live="descuento" class="mt-1 h-11 w-full rounded-2xl border border-rose-100 bg-white px-3 text-sm font-semibold outline-none focus:border-rose-300">
                         </label>
                         <label class="block">
                             <span class="text-xs font-bold text-stone-500">Monto recibido</span>
-                            <input type="number" step="0.01" wire:model.live="monto_recibido" class="mt-1 h-11 w-full border border-stone-200 px-3 text-sm font-semibold outline-none focus:border-stone-500">
+                            <input type="number" step="0.01" wire:model.live="monto_recibido" class="mt-1 h-11 w-full rounded-2xl border border-rose-100 bg-white px-3 text-sm font-semibold outline-none focus:border-rose-300">
                         </label>
                     </div>
 
@@ -777,7 +777,7 @@ new class extends Component
                         <p class="mb-2 text-xs font-bold text-stone-500">Metodo de pago</p>
                         <div class="grid grid-cols-2 gap-2">
                             @foreach (['efectivo' => 'Efectivo', 'tarjeta' => 'Tarjeta', 'transferencia' => 'Transferencia', 'mixto' => 'Mixto'] as $metodo => $label)
-                                <button type="button" wire:click="$set('metodo_pago', '{{ $metodo }}')" class="border px-3 py-2 text-sm font-black transition {{ $metodo_pago === $metodo ? 'border-orange-500 bg-orange-500 text-white' : 'border-stone-200 bg-white text-stone-600 hover:bg-stone-50' }}">
+                                <button type="button" wire:click="$set('metodo_pago', '{{ $metodo }}')" class="rounded-2xl border px-3 py-2 text-sm font-black transition {{ $metodo_pago === $metodo ? 'border-rose-500 bg-rose-500 text-white' : 'border-rose-100 bg-white text-stone-600 hover:bg-rose-50' }}">
                                     {{ $label }}
                                 </button>
                             @endforeach
@@ -794,7 +794,7 @@ new class extends Component
                         </div>
                     </div>
 
-                    <button type="button" wire:click="confirmarVenta" @disabled($carrito === [] || ! $this->cajaAbierta) class="mt-5 w-full bg-orange-500 px-5 py-4 text-sm font-black text-white transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-orange-200">
+                    <button type="button" wire:click="confirmarVenta" @disabled($carrito === [] || ! $this->cajaAbierta) class="mt-5 w-full rounded-full bg-rose-500 px-5 py-4 text-sm font-black text-white shadow-sm shadow-rose-900/15 transition hover:-translate-y-px hover:bg-rose-600 disabled:cursor-not-allowed disabled:bg-rose-200">
                         @if (! $this->cajaAbierta)
                             Abre caja para vender
                         @elseif ($carrito === [])
@@ -809,7 +809,7 @@ new class extends Component
     </section>
 {{-- Reportes operativos --}}
 
-    <div class="mt-4 border border-stone-200 bg-white">
+    <div class="mt-4 overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/85 shadow-sm shadow-rose-950/5 ring-1 ring-rose-100/70 backdrop-blur">
 
         {{-- Historial de ventas + Top productos --}}
         <div class="grid xl:grid-cols-[1.35fr_0.65fr] xl:divide-x xl:divide-stone-200">

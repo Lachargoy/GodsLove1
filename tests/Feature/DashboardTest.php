@@ -16,9 +16,9 @@ test('authenticated users can visit the dashboard', function () {
 
     $response = $this->get(route('dashboard'));
     $response->assertOk();
-    $response->assertSee('Tu neveria, hoy.');
+    $response->assertSee('Mas frescas, mas ricas, mas claras.');
     $response->assertSee('Nueva venta');
-    $response->assertSee('Centro operativo');
+    $response->assertSee('GodsLove operativo');
     $response->assertSee('Inventario bajo');
     $response->assertSee('Ultimas ventas');
 });

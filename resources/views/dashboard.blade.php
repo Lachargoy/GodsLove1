@@ -46,37 +46,38 @@
 @endphp
 
 <x-layouts::app :title="__('Dashboard')">
-    <section class="relative overflow-hidden rounded-[1.75rem] border border-slate-900 bg-slate-950 p-6 text-white shadow-sm sm:p-8">
-        <div class="absolute -right-24 -top-24 size-72 rounded-full bg-emerald-400/20 blur-3xl"></div>
-        <div class="absolute bottom-0 left-1/2 h-px w-1/2 bg-gradient-to-r from-transparent via-emerald-300/40 to-transparent"></div>
+    <section class="relative overflow-hidden rounded-[2rem] border border-white/80 bg-slate-950 p-6 text-white shadow-[0_24px_80px_-52px_rgba(15,23,42,0.85)] ring-1 ring-rose-100/40 sm:p-8">
+        <div class="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-rose-400 via-amber-300 to-emerald-400"></div>
+        <div class="absolute -right-16 -top-20 size-72 rounded-full bg-rose-400/18 blur-3xl"></div>
+        <div class="absolute -bottom-24 left-1/2 size-80 rounded-full bg-emerald-300/16 blur-3xl"></div>
+        <div class="absolute bottom-0 left-1/2 h-px w-1/2 bg-gradient-to-r from-transparent via-rose-200/40 to-transparent"></div>
 
         <div class="relative grid gap-8 xl:grid-cols-[1fr_360px] xl:items-end">
             <div>
                 <div class="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-100">
                     <span class="size-2 rounded-full {{ $cajaAbierta ? 'bg-emerald-300' : 'bg-amber-300' }}"></span>
-                    Centro operativo
+                    GodsLove operativo
                 </div>
 
-                <h1 class="max-w-4xl text-4xl font-semibold tracking-tight text-white sm:text-5xl">
-                    Tu neveria, hoy.
+                <h1 class="max-w-4xl text-4xl font-black tracking-normal text-white sm:text-5xl">
+                    Mas frescas, mas ricas, mas claras.
                 </h1>
 
                 <p class="mt-4 max-w-2xl text-sm leading-6 text-slate-300">
-                    Entra, abre caja, vende, revisa inventario bajo y cierra el dia con los numeros enfrente.
-                    Nada de tablero bonito que no ayuda: este es el mapa rapido de operacion.
+                    Entra, abre caja, vende, revisa inventario bajo y cierra el dia con los numeros enfrente. Una vista suave para trabajar rapido sin perder el encanto Godslove.
                 </p>
 
                 <div class="mt-6 flex flex-col gap-3 sm:flex-row">
-                    <a href="{{ route('ventas.punto') }}" wire:navigate class="inline-flex items-center justify-center rounded-2xl bg-emerald-400 px-5 py-3 text-sm font-bold text-slate-950 transition hover:bg-emerald-300">
+                    <a href="{{ route('ventas.punto') }}" wire:navigate class="inline-flex items-center justify-center rounded-full bg-rose-400 px-5 py-3 text-sm font-black text-white shadow-sm shadow-rose-950/30 transition hover:-translate-y-px hover:bg-rose-300">
                         Nueva venta
                     </a>
-                    <a href="{{ route('caja.corte') }}" wire:navigate class="inline-flex items-center justify-center rounded-2xl border border-white/15 bg-white/10 px-5 py-3 text-sm font-bold text-white transition hover:bg-white/15">
+                    <a href="{{ route('caja.corte') }}" wire:navigate class="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/10 px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-px hover:bg-white/15">
                         {{ $cajaAbierta ? 'Ver caja abierta' : 'Abrir caja del dia' }}
                     </a>
                 </div>
             </div>
 
-            <div class="rounded-3xl border border-white/10 bg-white/[0.06] p-5 backdrop-blur">
+            <div class="rounded-[1.75rem] border border-white/10 bg-white/[0.08] p-5 shadow-inner shadow-white/5 backdrop-blur">
                 <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">Balance operativo de hoy</p>
                 <p class="mt-3 text-4xl font-semibold tracking-tight {{ $balanceOperativo < 0 ? 'text-rose-200' : 'text-white' }}">
                     ${{ number_format($balanceOperativo, 2) }}
@@ -99,25 +100,25 @@
     </section>
 
     <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <article class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+        <article class="app-stat-card">
             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Total vendido</p>
             <p class="mt-3 text-3xl font-semibold tracking-tight text-slate-950">${{ number_format($totalVendidoHoy, 2) }}</p>
             <p class="mt-2 text-sm text-slate-500">{{ $ticketsHoy }} tickets registrados hoy</p>
         </article>
 
-        <article class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+        <article class="app-stat-card">
             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Ticket promedio</p>
             <p class="mt-3 text-3xl font-semibold tracking-tight text-slate-950">${{ number_format($ticketPromedio, 2) }}</p>
             <p class="mt-2 text-sm text-slate-500">Efectivo: ${{ number_format($efectivoHoy, 2) }}</p>
         </article>
 
-        <article class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+        <article class="app-stat-card">
             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Productos activos</p>
             <p class="mt-3 text-3xl font-semibold tracking-tight text-slate-950">{{ $productosActivos }}</p>
             <p class="mt-2 text-sm text-slate-500">{{ $productosConfigurables }} configurables</p>
         </article>
 
-        <article class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+        <article class="app-stat-card">
             <p class="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Alertas de stock</p>
             <p class="mt-3 text-3xl font-semibold tracking-tight {{ $insumosBajos->isEmpty() ? 'text-emerald-700' : 'text-amber-700' }}">{{ $insumosBajos->count() }}</p>
             <p class="mt-2 text-sm text-slate-500">{{ $insumosBajos->isEmpty() ? 'Sin insumos bajos' : 'Insumos bajo minimo' }}</p>
@@ -125,7 +126,7 @@
     </section>
 
     <section class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <div class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+        <div class="app-card">
             <div class="flex flex-col gap-3 border-b border-slate-100 pb-5 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                     <p class="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-600">Siguiente accion</p>
@@ -137,28 +138,28 @@
                     </p>
                 </div>
 
-                <a href="{{ $cajaAbierta ? route('ventas.punto') : route('caja.corte') }}" wire:navigate class="inline-flex items-center justify-center rounded-2xl bg-slate-950 px-5 py-3 text-sm font-bold text-white transition hover:bg-slate-800">
+                <a href="{{ $cajaAbierta ? route('ventas.punto') : route('caja.corte') }}" wire:navigate class="inline-flex items-center justify-center rounded-full bg-slate-950 px-5 py-3 text-sm font-bold text-white transition hover:-translate-y-px hover:bg-slate-800">
                     {{ $cajaAbierta ? 'Ir al POS' : 'Abrir caja' }}
                 </a>
             </div>
 
             <div class="mt-5 grid gap-3 md:grid-cols-2">
-                <a href="{{ route('productos.index') }}" wire:navigate class="group rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-emerald-200 hover:bg-emerald-50">
+                <a href="{{ route('productos.index') }}" wire:navigate class="group app-card-muted">
                     <p class="text-sm font-semibold text-slate-950">Alta de productos</p>
                     <p class="mt-1 text-sm leading-6 text-slate-500">Crea producto simple, con receta o configurable.</p>
                 </a>
 
-                <a href="{{ route('productos.recetas') }}" wire:navigate class="group rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-emerald-200 hover:bg-emerald-50">
+                <a href="{{ route('productos.recetas') }}" wire:navigate class="group app-card-muted">
                     <p class="text-sm font-semibold text-slate-950">Editar receta y sabores</p>
                     <p class="mt-1 text-sm leading-6 text-slate-500">Configura bolas, consumo y sabores seleccionables.</p>
                 </a>
 
-                <a href="{{ route('inventario.movimientos') }}" wire:navigate class="group rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-emerald-200 hover:bg-emerald-50">
+                <a href="{{ route('inventario.movimientos') }}" wire:navigate class="group app-card-muted">
                     <p class="text-sm font-semibold text-slate-950">Movimiento de inventario</p>
                     <p class="mt-1 text-sm leading-6 text-slate-500">Compra, salida o merma con costo promedio.</p>
                 </a>
 
-                <a href="{{ route('gastos.index') }}" wire:navigate class="group rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-emerald-200 hover:bg-emerald-50">
+                <a href="{{ route('gastos.index') }}" wire:navigate class="group app-card-muted">
                     <p class="text-sm font-semibold text-slate-950">Registrar gasto</p>
                     <p class="mt-1 text-sm leading-6 text-slate-500">Desde caja del dia o balance general.</p>
                 </a>
@@ -166,7 +167,7 @@
         </div>
 
         <div class="space-y-6">
-            <div class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+            <div class="app-card">
                 <div class="flex items-start justify-between gap-4">
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Caja del dia</p>
@@ -187,7 +188,7 @@
                 </div>
             </div>
 
-            <div class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+            <div class="app-card">
                 <div class="mb-4 flex items-center justify-between gap-3">
                     <div>
                         <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Inventario bajo</p>
@@ -217,7 +218,7 @@
         </div>
     </section>
 
-    <section class="rounded-3xl border border-white bg-white p-5 shadow-sm ring-1 ring-slate-200/70">
+    <section class="app-card">
         <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
                 <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Actividad reciente</p>
