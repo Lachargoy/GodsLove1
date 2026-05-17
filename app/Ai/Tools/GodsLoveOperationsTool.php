@@ -177,9 +177,11 @@ TEXT;
                 ->items($schema->object([
                     'producto_id' => $schema->integer()->required(),
                     'cantidad' => $schema->number()->required(),
-                    'selected_options' => $schema->array()->items($schema->integer())->nullable(),
+                    'selected_options' => $schema->object()
+                        ->description('Opciones para productos configurables: {group_id: {option_item_id: cantidad}}.')
+                        ->nullable(),
                 ])->withoutAdditionalProperties())
-                ->description('Lineas de venta con producto_id, cantidad y opciones si aplica.')
+                ->description('Lineas de venta con producto_id, cantidad y selected_options si el producto requiere sabores/opciones.')
                 ->nullable(),
             'descuento' => $schema->number()->description('Descuento de venta.')->nullable(),
             'metodo_pago' => $schema->string()->enum(['efectivo', 'tarjeta', 'transferencia', 'mixto'])->nullable(),

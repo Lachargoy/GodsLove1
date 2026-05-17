@@ -1,9 +1,13 @@
 <?php
 
 use App\Ai\Agents\OperationsAgent;
+use App\Models\CorteCaja;
 use App\Models\Insumo;
+use App\Models\Producto;
 use App\Models\User;
+use App\Models\Venta;
 use App\Services\Ai\OpenRouterAssistantService;
+use App\Services\Mcp\OperationsAssistantService;
 use Database\Seeders\CategoriaGastoSeeder;
 use Database\Seeders\CategoriaInsumoSeeder;
 use Database\Seeders\CategoriaProductoSeeder;
@@ -123,6 +127,8 @@ test('assistant loop mode plans and executes until completed', function () {
         ->set('loopMode', true)
         ->set('prompt', 'Revisa la caja y dime que sigue')
         ->call('enviar')
+        ->assertSet('messages.1.role', 'user')
+        ->assertSet('messages.2.content', "Loop terminado.\n\nLOOP_COMPLETED: La caja esta cerrada y no hay mas acciones necesarias.")
         ->assertSet('lastLoopSteps.0.tipo', 'plan')
         ->assertSet('lastLoopSteps.1.estado', 'completed')
         ->assertSee('Loop terminado');
@@ -215,8 +221,8 @@ test('prepared confirmations are kept for the next agent prompt', function () {
     $user = User::factory()->create();
     $assistant = app(OpenRouterAssistantService::class);
 
-    $assistant->respond([
-        ['role' => 'user', 'content' => 'si confirma'],
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'revisa el contexto pendiente'],
     ], $user, [
         [
             'operation' => 'venta',
@@ -224,6 +230,74 @@ test('prepared confirmations are kept for the next agent prompt', function () {
             'summary' => ['total' => 50],
         ],
     ]);
+
+    expect($response['reply'])->toContain('Confirmo');
+});
+
+test('assistant confirms a single pending sale without asking the model again', function () {
+    $this->seed([
+        UnitSeeder::class,
+        InventoryCategorySeeder::class,
+        CategoriaProductoSeeder::class,
+        CategoriaInsumoSeeder::class,
+        CategoriaGastoSeeder::class,
+        ProductoSeeder::class,
+        InsumoSeeder::class,
+        ProductoInsumoSeeder::class,
+    ]);
+
+    OperationsAgent::fake([])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    CorteCaja::query()->create([
+        'user_id' => $user->id,
+        'fecha_apertura' => now(),
+        'monto_inicial' => 500,
+        'estado' => 'abierto',
+    ]);
+
+    $product = Producto::query()->where('nombre', 'Cono sencillo')->firstOrFail();
+    $prepared = app(OperationsAssistantService::class)->prepareSale([
+        ['producto_id' => $product->id, 'cantidad' => 1],
+    ]);
+
+    $assistant = app(OpenRouterAssistantService::class);
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'si confirmo'],
+    ], $user, [[
+        'operation' => 'venta',
+        'confirmation_token' => $prepared['confirmation_token'],
+        'summary' => $prepared['resumen'],
+    ]]);
+
+    expect($response['reply'])->toContain('Venta confirmada')
+        ->and($response['tool_results'][0]['result']['status'])->toBe('confirmed')
+        ->and($response['pending_confirmations'])->toBe([])
+        ->and(Venta::query()->count())->toBe(1);
+
+    OperationsAgent::assertNeverPrompted();
+});
+
+test('assistant cancels pending confirmations directly', function () {
+    OperationsAgent::fake([])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+    $assistant = app(OpenRouterAssistantService::class);
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'no, cancela eso'],
+    ], $user, [[
+        'operation' => 'venta',
+        'confirmation_token' => 'tok_cancel',
+        'summary' => ['total' => 100],
+    ]]);
+
+    expect($response['reply'])->toContain('cancele')
+        ->and($response['tool_results'])->toBe([])
+        ->and($response['pending_confirmations'])->toBe([]);
+
+    OperationsAgent::assertNeverPrompted();
 });
 
 test('laravel ai agent can prepare insumo creation through operations tool', function () {

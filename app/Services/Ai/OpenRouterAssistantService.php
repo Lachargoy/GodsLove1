@@ -4,6 +4,8 @@ namespace App\Services\Ai;
 
 use App\Ai\Agents\OperationsAgent;
 use App\Models\User;
+use App\Services\Mcp\OperationsAssistantService;
+use Illuminate\Support\Str;
 use Laravel\Ai\Messages\AssistantMessage;
 use Laravel\Ai\Messages\UserMessage;
 use RuntimeException;
@@ -11,6 +13,10 @@ use RuntimeException;
 class OpenRouterAssistantService
 {
     private const int LoopStepLimit = 6;
+
+    public function __construct(
+        private readonly OperationsAssistantService $operations,
+    ) {}
 
     /**
      * @param  array<int, array<string, mixed>>  $history
@@ -32,6 +38,20 @@ class OpenRouterAssistantService
 
         $prompt = (string) $visibleHistory[$lastUserIndex]['content'];
         $previousMessages = array_slice($visibleHistory, 0, $lastUserIndex);
+
+        if ($this->isCancellationIntent($prompt) && $pendingConfirmations !== []) {
+            return $this->directReply(
+                $visibleHistory,
+                'Listo, cancele la operacion pendiente. No se guardo ningun cambio.',
+                [],
+                [],
+            );
+        }
+
+        if ($this->isConfirmationIntent($prompt) && $pendingConfirmations !== []) {
+            return $this->confirmFromPending($visibleHistory, $pendingConfirmations);
+        }
+
         $response = $this->promptAgent($prompt, $previousMessages, $pendingConfirmations);
         $toolResults = $response['tool_results'];
 
@@ -63,6 +83,38 @@ class OpenRouterAssistantService
         }
 
         $goal = (string) $visibleHistory[$lastUserIndex]['content'];
+
+        if ($this->isCancellationIntent($goal) && $pendingConfirmations !== []) {
+            return [
+                ...$this->directReply(
+                    $visibleHistory,
+                    'Listo, cancele la operacion pendiente. No se guardo ningun cambio.',
+                    [],
+                    [],
+                ),
+                'loop_steps' => [[
+                    'tipo' => 'cancel',
+                    'estado' => 'completed',
+                    'resumen' => 'Operacion pendiente cancelada por instruccion del usuario.',
+                    'tools' => [],
+                ]],
+            ];
+        }
+
+        if ($this->isConfirmationIntent($goal) && $pendingConfirmations !== []) {
+            $result = $this->confirmFromPending($visibleHistory, $pendingConfirmations);
+
+            return [
+                ...$result,
+                'loop_steps' => [[
+                    'tipo' => 'confirm',
+                    'estado' => data_get($result, 'tool_results.0.result.status') === 'confirmed' ? 'completed' : 'blocked',
+                    'resumen' => $result['reply'],
+                    'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
+                ]],
+            ];
+        }
+
         $messages = $visibleHistory;
         $allToolResults = [];
         $steps = [];
@@ -81,6 +133,7 @@ class OpenRouterAssistantService
             'resumen' => $planResponse['reply'],
         ];
 
+        $allToolResults = [...$allToolResults, ...$planResponse['tool_results']];
         $currentPendingConfirmations = $this->mergePendingConfirmations($currentPendingConfirmations, $planResponse['tool_results']);
 
         for ($step = 1; $step <= max(1, $maxSteps); $step++) {
@@ -121,13 +174,14 @@ class OpenRouterAssistantService
         }
 
         $finalReply = $this->loopFinalReply($steps);
+        $conversationMessages = [...$visibleHistory, [
+            'role' => 'assistant',
+            'content' => $finalReply,
+        ]];
 
         return [
             'reply' => $finalReply,
-            'messages' => [...$messages, [
-                'role' => 'assistant',
-                'content' => $finalReply,
-            ]],
+            'messages' => $conversationMessages,
             'tool_results' => $allToolResults,
             'pending_confirmations' => $currentPendingConfirmations,
             'loop_steps' => $steps,
@@ -295,10 +349,158 @@ PROMPT;
         $status = $lastStep['estado'] ?? 'completed';
 
         return match ($status) {
-            'waiting_confirmation' => "Loop pausado: ya deje una operacion preparada y necesito tu confirmacion para continuar.\n\n".($lastStep['resumen'] ?? ''),
+            'waiting_confirmation' => $this->waitingConfirmationReply($steps),
             'blocked' => "Loop bloqueado: falta informacion o una condicion del sistema no permite seguir.\n\n".($lastStep['resumen'] ?? ''),
             default => "Loop terminado.\n\n".($lastStep['resumen'] ?? 'Complete los pasos posibles.'),
         };
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $steps
+     */
+    private function waitingConfirmationReply(array $steps): string
+    {
+        $preparedStep = collect($steps)
+            ->reverse()
+            ->first(fn (array $step): bool => ($step['estado'] ?? null) === 'waiting_confirmation' && ($step['tipo'] ?? null) !== 'pause');
+
+        return "Loop pausado: ya deje una operacion preparada y necesito tu confirmacion para continuar.\n\n"
+            .($preparedStep['resumen'] ?? 'Confirma si quieres guardar el cambio preparado.');
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $messages
+     * @param  array<int, array<string, mixed>>  $toolResults
+     * @param  array<int, array<string, mixed>>  $pendingConfirmations
+     * @return array<string, mixed>
+     */
+    private function directReply(array $messages, string $reply, array $toolResults, array $pendingConfirmations): array
+    {
+        return [
+            'reply' => $reply,
+            'messages' => [...$messages, [
+                'role' => 'assistant',
+                'content' => $reply,
+            ]],
+            'tool_results' => $toolResults,
+            'pending_confirmations' => $pendingConfirmations,
+        ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $messages
+     * @param  array<int, array<string, mixed>>  $pendingConfirmations
+     * @return array<string, mixed>
+     */
+    private function confirmFromPending(array $messages, array $pendingConfirmations): array
+    {
+        if (count($pendingConfirmations) !== 1) {
+            return $this->directReply(
+                $messages,
+                'Tengo varias operaciones pendientes. Dime cual quieres confirmar para evitar guardar algo equivocado.',
+                [],
+                $pendingConfirmations,
+            );
+        }
+
+        $confirmation = array_values($pendingConfirmations)[0];
+        $token = (string) ($confirmation['confirmation_token'] ?? '');
+        $operation = (string) ($confirmation['operation'] ?? '');
+        $result = $this->confirmOperation($operation, $token);
+        $toolResults = [[
+            'name' => 'operacion_godslove',
+            'result' => $result,
+        ]];
+
+        if (($result['status'] ?? null) !== 'confirmed') {
+            return $this->directReply(
+                $messages,
+                'No pude confirmar la operacion pendiente: '.(string) ($result['error'] ?? 'respuesta inesperada'),
+                $toolResults,
+                $pendingConfirmations,
+            );
+        }
+
+        return $this->directReply(
+            $messages,
+            $this->confirmedReply($result),
+            $toolResults,
+            [],
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function confirmOperation(string $operation, string $token): array
+    {
+        try {
+            return match ($operation) {
+                'venta' => $this->operations->confirmSale($token),
+                'abrir_caja' => $this->operations->confirmOpenCashRegister($token),
+                'cerrar_caja' => $this->operations->confirmCloseCashRegister($token),
+                'movimiento_inventario' => $this->operations->confirmInventoryMovement($token),
+                'alta_insumo' => $this->operations->confirmCreateInsumo($token),
+                'alta_categoria' => $this->operations->confirmCreateCategory($token),
+                'alta_producto' => $this->operations->confirmCreateProduct($token),
+                'receta_producto' => $this->operations->confirmProductRecipe($token),
+                'opciones_producto' => $this->operations->confirmProductOptions($token),
+                default => [
+                    'status' => 'error',
+                    'error' => 'No se reconoce la operacion pendiente.',
+                ],
+            };
+        } catch (\Throwable $throwable) {
+            return [
+                'status' => 'error',
+                'error' => $throwable->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function confirmedReply(array $result): string
+    {
+        $operation = (string) ($result['operacion'] ?? 'operacion');
+
+        if ($operation === 'venta') {
+            return sprintf(
+                'Venta confirmada y registrada. Folio %s, total $%s, metodo %s.',
+                data_get($result, 'venta.folio', 'sin folio'),
+                number_format((float) data_get($result, 'venta.total', 0), 2),
+                data_get($result, 'venta.metodo_pago', 'no indicado'),
+            );
+        }
+
+        return 'Operacion confirmada y guardada: '.$operation.'.';
+    }
+
+    private function isConfirmationIntent(string $message): bool
+    {
+        $normalized = Str::of($message)
+            ->lower()
+            ->ascii()
+            ->squish()
+            ->toString();
+
+        if ($this->isCancellationIntent($normalized)) {
+            return false;
+        }
+
+        return preg_match('/\b(si|confirmo|confirma|dale|ok|va|hazlo|adelante|autorizo|registralo|registrala|guardalo|guardala)\b/', $normalized) === 1;
+    }
+
+    private function isCancellationIntent(string $message): bool
+    {
+        $normalized = Str::of($message)
+            ->lower()
+            ->ascii()
+            ->squish()
+            ->toString();
+
+        return preg_match('/\b(no|cancela|cancelalo|cancelala|deten|espera|no confirmo)\b/', $normalized) === 1;
     }
 
     private function decodeToolResult(mixed $result): mixed
@@ -342,14 +544,34 @@ PROMPT;
         foreach ($toolResults as $toolResult) {
             $result = $toolResult['result'] ?? [];
 
-            if (! is_array($result) || ! isset($result['confirmation_token'])) {
+            if (! is_array($result)) {
+                continue;
+            }
+
+            if (($result['status'] ?? null) === 'confirmed') {
+                $operation = $result['operacion'] ?? null;
+
+                if ($operation !== null) {
+                    $matchingTokens = $pending
+                        ->filter(fn (array $confirmation): bool => ($confirmation['operation'] ?? null) === $operation)
+                        ->keys();
+
+                    if ($matchingTokens->count() === 1) {
+                        $pending->forget($matchingTokens->first());
+                    }
+                }
+
+                continue;
+            }
+
+            if (! isset($result['confirmation_token'])) {
                 continue;
             }
 
             $pending->put($result['confirmation_token'], [
                 'operation' => $result['operacion'] ?? $result['operation'] ?? $toolResult['name'],
                 'confirmation_token' => $result['confirmation_token'],
-                'summary' => $result['summary'] ?? $result,
+                'summary' => $result['resumen'] ?? $result['summary'] ?? $result,
             ]);
         }
 
