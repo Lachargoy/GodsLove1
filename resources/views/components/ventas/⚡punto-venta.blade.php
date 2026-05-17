@@ -533,18 +533,6 @@ new class extends Component
     class="relative -mx-4 min-h-screen px-4 pb-28 pt-1 xl:pb-8"
     style="font-family: 'DM Sans', sans-serif;"
 >
-    @if (session('success'))
-        <div class="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-sm">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if (session('error'))
-        <div class="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800 shadow-sm">
-            {{ session('error') }}
-        </div>
-    @endif
-
     @if (! $this->cajaAbierta)
         <div class="mb-4 rounded-[1.5rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -712,7 +700,12 @@ new class extends Component
                         </div>
                     </div>
                 @empty
-                    <div class="px-5 py-12 text-center text-sm text-stone-400">No hay productos con esos filtros.</div>
+                    <div class="px-5 py-6">
+                        <div class="godslove-empty">
+                            <p class="godslove-empty-title">No hay productos con esos filtros</p>
+                            <p class="godslove-empty-copy">Limpia la busqueda o cambia de categoria para seguir vendiendo.</p>
+                        </div>
+                    </div>
                 @endforelse
             </div>
         </div>
@@ -754,9 +747,11 @@ new class extends Component
                             </div>
                         </div>
                     @empty
-                        <div class="px-5 py-12 text-center">
-                            <p class="text-sm font-black text-stone-700">Carrito vacio</p>
-                            <p class="mt-1 text-xs text-stone-400">Agrega productos para iniciar la venta.</p>
+                        <div class="px-5 py-6">
+                            <div class="godslove-empty">
+                                <p class="godslove-empty-title">Carrito vacio</p>
+                                <p class="godslove-empty-copy">Agrega productos para iniciar la venta.</p>
+                            </div>
                         </div>
                     @endforelse
                 </div>
@@ -942,8 +937,11 @@ new class extends Component
                             </div>
                         </div>
                     @empty
-                        <div class="py-10 text-center">
-                            <p class="text-sm text-stone-400">Sin ventas registradas</p>
+                        <div class="px-4 py-5">
+                            <div class="godslove-empty">
+                                <p class="godslove-empty-title">Sin ventas registradas</p>
+                                <p class="godslove-empty-copy">El historial se llenara conforme cobres ventas.</p>
+                            </div>
                         </div>
                     @endforelse
                 </div>
@@ -976,8 +974,11 @@ new class extends Component
                                 </div>
                             </div>
                         @empty
-                            <div class="px-4 py-8 text-center text-sm text-stone-400">
-                                Sin ventas aun hoy
+                            <div class="px-4 py-5">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">Sin ventas aun hoy</p>
+                                    <p class="godslove-empty-copy">Los productos mas vendidos apareceran aqui.</p>
+                                </div>
                             </div>
                         @endforelse
                     </div>
@@ -1004,8 +1005,11 @@ new class extends Component
                                 </p>
                             </div>
                         @empty
-                            <div class="px-4 py-8 text-center text-sm text-stone-400">
-                                Sin insumos consumidos hoy
+                            <div class="px-4 py-5">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">Sin insumos consumidos hoy</p>
+                                    <p class="godslove-empty-copy">Cuando vendas productos con receta, veras el consumo.</p>
+                                </div>
                             </div>
                         @endforelse
                     </div>
@@ -1033,7 +1037,12 @@ new class extends Component
                             @endif
                         @endforeach
                         @if (array_sum($this->ventasPorMetodo) === 0.0)
-                            <div class="px-4 py-6 text-center text-sm text-stone-400">Sin ventas hoy</div>
+                            <div class="px-4 py-5">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">Sin ventas hoy</p>
+                                    <p class="godslove-empty-copy">Aqui se repartiran los cobros por metodo de pago.</p>
+                                </div>
+                            </div>
                         @endif
                     </div>
                 </div>

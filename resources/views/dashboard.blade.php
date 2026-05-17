@@ -249,8 +249,11 @@
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="5" class="px-3 py-8 text-center text-sm text-slate-500">
-                                Todavia no hay ventas registradas.
+                            <td colspan="5" class="px-3 py-6">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">Todavia no hay ventas registradas</p>
+                                    <p class="godslove-empty-copy">Cuando cobres la primera venta, aparecera aqui con su folio y total.</p>
+                                </div>
                             </td>
                         </tr>
                     @endforelse

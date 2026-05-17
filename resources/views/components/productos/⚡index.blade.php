@@ -367,12 +367,6 @@ new class extends Component
         </div>
     </div>
 
-    @if (session('success'))
-        <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {{ session('success') }}
-        </div>
-    @endif
-
     <div class="grid gap-4 md:grid-cols-3">
         <div class="app-stat-card">
             <p class="text-sm text-slate-500">Total productos</p>
@@ -882,8 +876,11 @@ new class extends Component
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="7" class="p-6 text-center text-sm text-slate-500">
-                                No hay productos registrados con los filtros actuales.
+                            <td colspan="7" class="p-4">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">No hay productos con esos filtros</p>
+                                    <p class="godslove-empty-copy">Limpia la busqueda o registra un producto nuevo para verlo aqui.</p>
+                                </div>
                             </td>
                         </tr>
                     @endforelse

@@ -198,18 +198,6 @@ new class extends Component
         </a>
     </div>
 
-    @if (session('success'))
-        <div class="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            {{ session('success') }}
-        </div>
-    @endif
-
-    @if (session('error'))
-        <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {{ session('error') }}
-        </div>
-    @endif
-
     @if (! $this->cajaAbierta)
         <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div class="mb-4">
@@ -360,8 +348,11 @@ new class extends Component
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="6" class="p-6 text-center text-sm text-slate-500">
-                                            Todavia no hay ventas ligadas a este turno.
+                                        <td colspan="6" class="p-4">
+                                            <div class="godslove-empty">
+                                                <p class="godslove-empty-title">Todavia no hay ventas ligadas a este turno</p>
+                                                <p class="godslove-empty-copy">Cuando registres ventas con caja abierta, apareceran aqui para el corte.</p>
+                                            </div>
                                         </td>
                                     </tr>
                                 @endforelse
@@ -407,8 +398,11 @@ new class extends Component
                                     </tr>
                                 @empty
                                     <tr>
-                                        <td colspan="7" class="p-6 text-center text-sm text-slate-500">
-                                            Todavia no hay gastos ligados a este turno.
+                                        <td colspan="7" class="p-4">
+                                            <div class="godslove-empty">
+                                                <p class="godslove-empty-title">Todavia no hay gastos ligados a este turno</p>
+                                                <p class="godslove-empty-copy">Los egresos desde caja del dia se veran aqui para cuadrar efectivo.</p>
+                                            </div>
                                         </td>
                                     </tr>
                                 @endforelse
@@ -543,8 +537,11 @@ new class extends Component
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="10" class="p-6 text-center text-sm text-slate-500">
-                                Todavia no hay cortes registrados.
+                            <td colspan="10" class="p-4">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">Todavia no hay cortes registrados</p>
+                                    <p class="godslove-empty-copy">Abre y cierra caja para construir el historial diario.</p>
+                                </div>
                             </td>
                         </tr>
                     @endforelse

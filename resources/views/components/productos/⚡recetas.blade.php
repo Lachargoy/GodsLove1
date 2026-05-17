@@ -755,12 +755,6 @@ new class extends Component
         </p>
     </div>
 
-    @if (session('success'))
-        <div class="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            {{ session('success') }}
-        </div>
-    @endif
-
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <p class="text-sm text-slate-500">Productos activos</p>
@@ -827,8 +821,9 @@ new class extends Component
                             @endif
                         </button>
                     @empty
-                        <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-                            No hay productos activos disponibles.
+                        <div class="godslove-empty">
+                            <p class="godslove-empty-title">No hay productos activos disponibles</p>
+                            <p class="godslove-empty-copy">Activa o crea un producto para configurar su receta.</p>
                         </div>
                     @endforelse
                 </div>

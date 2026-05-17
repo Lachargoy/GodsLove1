@@ -207,12 +207,6 @@ new class extends Component
         </a>
     </div>
 
-    @if (session('success'))
-        <div class="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            {{ session('success') }}
-        </div>
-    @endif
-
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <p class="text-sm text-slate-500">Total registros</p>
@@ -445,8 +439,11 @@ new class extends Component
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="8" class="p-6 text-center text-sm text-slate-500">
-                                No hay gastos registrados con los filtros actuales.
+                            <td colspan="8" class="p-4">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">No hay gastos con esos filtros</p>
+                                    <p class="godslove-empty-copy">Cuando registres un egreso, quedara listo para el corte y finanzas.</p>
+                                </div>
                             </td>
                         </tr>
                     @endforelse

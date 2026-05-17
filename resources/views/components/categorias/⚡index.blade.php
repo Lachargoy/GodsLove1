@@ -256,12 +256,6 @@ new class extends Component
         </p>
     </div>
 
-    @if (session('success'))
-        <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {{ session('success') }}
-        </div>
-    @endif
-
     <div class="grid gap-4 md:grid-cols-3">
         <div class="app-stat-card">
             <p class="text-sm text-slate-500">Categorias de productos</p>

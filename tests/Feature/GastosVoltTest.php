@@ -60,7 +60,6 @@ test('puede crear un gasto nuevo desde volt', function () {
         ->assertHasNoErrors()
         ->assertSet('descripcion', '')
         ->assertSet('monto', '')
-        ->assertSee('Gasto registrado correctamente.')
         ->assertSee('Compra de conos');
 
     $gasto = Gasto::query()->where('descripcion', 'Compra de conos')->first();
@@ -89,7 +88,7 @@ test('puede registrar gasto de balance general sin ligarlo a caja', function () 
         ->set('fecha_gasto', now()->toDateString())
         ->call('guardar')
         ->assertHasNoErrors()
-        ->assertSee('Gasto registrado correctamente.');
+        ->assertSee('Pago de dominio');
 
     $gasto = Gasto::query()->where('descripcion', 'Pago de dominio')->first();
 

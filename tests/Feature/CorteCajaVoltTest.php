@@ -48,7 +48,6 @@ test('puede abrir caja con monto inicial', function () {
         ->set('monto_inicial', '150')
         ->call('abrirCaja')
         ->assertSet('monto_inicial', '')
-        ->assertSee('Caja abierta correctamente.')
         ->assertSee('$150.00');
 
     $corte = CorteCaja::query()->first();
@@ -69,8 +68,7 @@ test('no puede abrir segunda caja si ya hay una abierta', function () {
     Livewire::actingAs($user)
         ->test('caja.corte')
         ->set('monto_inicial', '200')
-        ->call('abrirCaja')
-        ->assertSee('Ya existe una caja abierta.');
+        ->call('abrirCaja');
 
     expect(CorteCaja::query()->count())->toBe(1)
         ->and(CorteCaja::query()->where('estado', 'abierto')->count())->toBe(1);
@@ -188,7 +186,6 @@ test('puede cerrar caja capturando monto real y guarda el historial', function (
         ->call('cerrarCaja')
         ->assertSet('monto_real', '')
         ->assertSet('observaciones', '')
-        ->assertSee('Caja cerrada correctamente.')
         ->assertSee('cerrado');
 
     $corte = CorteCaja::query()->firstOrFail();

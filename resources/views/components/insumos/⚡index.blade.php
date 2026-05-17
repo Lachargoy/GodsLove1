@@ -389,12 +389,6 @@ new class extends Component
         </a>
     </div>
 
-    @if (session('success'))
-        <div class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-            {{ session('success') }}
-        </div>
-    @endif
-
     <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <div class="app-card">
             <p class="text-sm text-slate-500">Total insumos</p>
@@ -767,8 +761,11 @@ new class extends Component
                         </tr>
                     @empty
                         <tr>
-                            <td colspan="10" class="p-6 text-center text-sm text-slate-500">
-                                No hay insumos registrados con los filtros actuales.
+                            <td colspan="10" class="p-4">
+                                <div class="godslove-empty">
+                                    <p class="godslove-empty-title">No hay insumos con esos filtros</p>
+                                    <p class="godslove-empty-copy">Prueba limpiar la busqueda o registra un insumo base para inventario.</p>
+                                </div>
                             </td>
                         </tr>
                     @endforelse

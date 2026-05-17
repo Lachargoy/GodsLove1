@@ -120,7 +120,6 @@ test('puede editar precio y costo de un producto existente', function () {
         ->call('guardar')
         ->assertHasNoErrors()
         ->assertSet('editing_producto_id', '')
-        ->assertSee('Producto actualizado correctamente.')
         ->assertSee('$42.50');
 
     expect($producto->fresh())

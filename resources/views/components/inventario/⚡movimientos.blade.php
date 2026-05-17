@@ -204,12 +204,6 @@ new class extends Component
             <span><strong class="font-semibold text-slate-900">${{ number_format($this->valorAproximadoInventario, 2) }}</strong> inventario estimado</span>
     </div>
 
-    @if (session('success'))
-        <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">
-            {{ session('success') }}
-        </div>
-    @endif
-
     <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div class="grid min-h-[680px] xl:grid-cols-[340px_minmax(0,1fr)]">
             <aside class="border-b border-slate-200 bg-slate-50/60 xl:border-b-0 xl:border-r">
@@ -460,8 +454,11 @@ new class extends Component
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="7" class="px-4 py-12 text-center text-sm text-slate-500">
-                                        No hay movimientos registrados con los filtros actuales.
+                                    <td colspan="7" class="px-4 py-6">
+                                        <div class="godslove-empty">
+                                            <p class="godslove-empty-title">No hay movimientos con esos filtros</p>
+                                            <p class="godslove-empty-copy">Las entradas, salidas y ajustes apareceran aqui cuando los registres.</p>
+                                        </div>
                                     </td>
                                 </tr>
                             @endforelse

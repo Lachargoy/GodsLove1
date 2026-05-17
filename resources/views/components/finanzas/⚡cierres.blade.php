@@ -364,7 +364,12 @@ new class extends Component
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="5" class="p-6 text-center text-sm text-slate-500">No hay ventas en el rango seleccionado.</td>
+                                    <td colspan="5" class="p-4">
+                                        <div class="godslove-empty">
+                                            <p class="godslove-empty-title">No hay ventas en este rango</p>
+                                            <p class="godslove-empty-copy">Ajusta las fechas o registra ventas para analizar el periodo.</p>
+                                        </div>
+                                    </td>
                                 </tr>
                             @endforelse
                         </tbody>
@@ -410,7 +415,12 @@ new class extends Component
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="7" class="p-6 text-center text-sm text-slate-500">No hay gastos en el rango seleccionado.</td>
+                                    <td colspan="7" class="p-4">
+                                        <div class="godslove-empty">
+                                            <p class="godslove-empty-title">No hay gastos en este rango</p>
+                                            <p class="godslove-empty-copy">Ajusta las fechas o registra egresos para analizarlos aqui.</p>
+                                        </div>
+                                    </td>
                                 </tr>
                             @endforelse
                         </tbody>
@@ -484,7 +494,12 @@ new class extends Component
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="5" class="p-6 text-center text-sm text-slate-500">No hay cortes en el rango seleccionado.</td>
+                                    <td colspan="5" class="p-4">
+                                        <div class="godslove-empty">
+                                            <p class="godslove-empty-title">No hay cortes en este rango</p>
+                                            <p class="godslove-empty-copy">Los cierres de caja alimentan esta lectura financiera.</p>
+                                        </div>
+                                    </td>
                                 </tr>
                             @endforelse
                         </tbody>
