@@ -280,6 +280,65 @@ test('assistant confirms a single pending sale without asking the model again', 
     OperationsAgent::assertNeverPrompted();
 });
 
+test('assistant prepares straightforward sales without relying on the model', function () {
+    $this->seed([
+        UnitSeeder::class,
+        InventoryCategorySeeder::class,
+        CategoriaProductoSeeder::class,
+        CategoriaInsumoSeeder::class,
+        CategoriaGastoSeeder::class,
+        ProductoSeeder::class,
+        InsumoSeeder::class,
+        ProductoInsumoSeeder::class,
+    ]);
+
+    OperationsAgent::fake([])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+    $this->actingAs($user);
+
+    CorteCaja::query()->create([
+        'user_id' => $user->id,
+        'fecha_apertura' => now(),
+        'monto_inicial' => 500,
+        'estado' => 'abierto',
+    ]);
+
+    $assistant = app(OpenRouterAssistantService::class);
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'registra una venta de 2 conos sencillos en efectivo'],
+    ], $user);
+
+    expect($response['reply'])->toContain('Venta preparada')
+        ->and($response['reply'])->toContain('Cono sencillo')
+        ->and($response['tool_results'][0]['result']['status'])->toBe('requires_confirmation')
+        ->and($response['tool_results'][0]['result']['operacion'])->toBe('venta')
+        ->and($response['pending_confirmations'][0]['operation'])->toBe('venta')
+        ->and(Venta::query()->count())->toBe(0);
+
+    OperationsAgent::assertNeverPrompted();
+});
+
+test('assistant blocks new writes while another operation is pending', function () {
+    OperationsAgent::fake([])->preventStrayPrompts();
+
+    $user = User::factory()->create();
+    $assistant = app(OpenRouterAssistantService::class);
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'tambien registra una venta de 2 conos sencillos en efectivo'],
+    ], $user, [[
+        'operation' => 'abrir_caja',
+        'confirmation_token' => 'tok_open_cash',
+        'summary' => ['monto_inicial' => 500],
+    ]]);
+
+    expect($response['reply'])->toContain('no voy a mezclarla')
+        ->and($response['pending_confirmations'][0]['operation'])->toBe('abrir_caja')
+        ->and($response['tool_results'])->toBe([]);
+
+    OperationsAgent::assertNeverPrompted();
+});
+
 test('assistant cancels pending confirmations directly', function () {
     OperationsAgent::fake([])->preventStrayPrompts();
 

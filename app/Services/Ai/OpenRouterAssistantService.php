@@ -3,6 +3,7 @@
 namespace App\Services\Ai;
 
 use App\Ai\Agents\OperationsAgent;
+use App\Models\Producto;
 use App\Models\User;
 use App\Services\Mcp\OperationsAssistantService;
 use Illuminate\Support\Str;
@@ -50,6 +51,14 @@ class OpenRouterAssistantService
 
         if ($this->isConfirmationIntent($prompt) && $pendingConfirmations !== []) {
             return $this->confirmFromPending($visibleHistory, $pendingConfirmations);
+        }
+
+        if ($pendingConfirmations !== [] && $this->isMutationIntent($prompt)) {
+            return $this->pendingOperationBlock($visibleHistory, $pendingConfirmations);
+        }
+
+        if ($this->isSaleIntent($prompt)) {
+            return $this->prepareSaleFromPrompt($visibleHistory, $prompt);
         }
 
         $response = $this->promptAgent($prompt, $previousMessages, $pendingConfirmations);
@@ -109,6 +118,32 @@ class OpenRouterAssistantService
                 'loop_steps' => [[
                     'tipo' => 'confirm',
                     'estado' => data_get($result, 'tool_results.0.result.status') === 'confirmed' ? 'completed' : 'blocked',
+                    'resumen' => $result['reply'],
+                    'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
+                ]],
+            ];
+        }
+
+        if ($pendingConfirmations !== [] && $this->isMutationIntent($goal)) {
+            return [
+                ...$this->pendingOperationBlock($visibleHistory, $pendingConfirmations),
+                'loop_steps' => [[
+                    'tipo' => 'guard',
+                    'estado' => 'waiting_confirmation',
+                    'resumen' => 'Hay una operacion pendiente y se bloqueo una nueva escritura para evitar confusion.',
+                    'tools' => [],
+                ]],
+            ];
+        }
+
+        if ($this->isSaleIntent($goal)) {
+            $result = $this->prepareSaleFromPrompt($visibleHistory, $goal);
+
+            return [
+                ...$result,
+                'loop_steps' => [[
+                    'tipo' => 'sale_flow',
+                    'estado' => data_get($result, 'tool_results.0.result.status') === 'requires_confirmation' ? 'waiting_confirmation' : 'blocked',
                     'resumen' => $result['reply'],
                     'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
                 ]],
@@ -430,6 +465,284 @@ PROMPT;
     }
 
     /**
+     * @param  array<int, array<string, mixed>>  $messages
+     * @param  array<int, array<string, mixed>>  $pendingConfirmations
+     * @return array<string, mixed>
+     */
+    private function pendingOperationBlock(array $messages, array $pendingConfirmations): array
+    {
+        $summary = $this->pendingSummary($pendingConfirmations);
+
+        return $this->directReply(
+            $messages,
+            "Tengo una operacion pendiente y no voy a mezclarla con otra escritura.\n\n{$summary}\n\nResponde `confirmar` para guardarla o `cancelar` para descartarla. Tambien puedes hacer consultas mientras tanto.",
+            [],
+            $pendingConfirmations,
+        );
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $pendingConfirmations
+     */
+    private function pendingSummary(array $pendingConfirmations): string
+    {
+        if (count($pendingConfirmations) !== 1) {
+            return 'Hay varias operaciones pendientes. Necesito que me digas exactamente cual confirmar o cancelar.';
+        }
+
+        $pending = array_values($pendingConfirmations)[0];
+        $operation = (string) ($pending['operation'] ?? 'operacion');
+        $summary = $pending['summary'] ?? [];
+
+        if ($operation === 'venta') {
+            $lines = collect(data_get($summary, 'lineas', []))
+                ->map(fn (array $line): string => sprintf(
+                    '- %s x %s = $%s',
+                    number_format((float) ($line['cantidad'] ?? 0), 2),
+                    $line['nombre'] ?? 'producto',
+                    number_format((float) ($line['subtotal'] ?? 0), 2),
+                ))
+                ->implode("\n");
+
+            return "Operacion pendiente: venta.\n{$lines}\nTotal: $".number_format((float) data_get($summary, 'total', 0), 2);
+        }
+
+        return 'Operacion pendiente: '.$operation.'.';
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $messages
+     * @return array<string, mixed>
+     */
+    private function prepareSaleFromPrompt(array $messages, string $prompt): array
+    {
+        $quantity = $this->extractQuantity($prompt);
+
+        if ($quantity === null) {
+            return $this->directReply(
+                $messages,
+                'Para preparar la venta necesito la cantidad. Ejemplo: `vendí 2 conos sencillos en efectivo`.',
+                [],
+                [],
+            );
+        }
+
+        $productResolution = $this->resolveProductFromPrompt($prompt);
+
+        if (($productResolution['status'] ?? null) !== 'resolved') {
+            return $this->directReply(
+                $messages,
+                (string) $productResolution['reply'],
+                [],
+                [],
+            );
+        }
+
+        /** @var Producto $product */
+        $product = $productResolution['product'];
+        $paymentMethod = $this->extractPaymentMethod($prompt);
+        $result = $this->operations->prepareSale([
+            [
+                'producto_id' => $product->id,
+                'cantidad' => $quantity,
+            ],
+        ], 0, $paymentMethod);
+
+        $toolResults = [[
+            'name' => 'operacion_godslove',
+            'result' => $result,
+        ]];
+
+        if (($result['status'] ?? null) === 'requires_confirmation') {
+            return $this->directReply(
+                $messages,
+                $this->preparedSaleReply($result),
+                $toolResults,
+                $this->mergePendingConfirmations([], $toolResults),
+            );
+        }
+
+        return $this->directReply(
+            $messages,
+            $this->blockedSaleReply($result),
+            $toolResults,
+            [],
+        );
+    }
+
+    private function extractQuantity(string $prompt): ?float
+    {
+        $normalized = $this->normalizeText($prompt);
+
+        if (preg_match('/\b(\d+(?:[.,]\d+)?)\b/', $normalized, $matches) === 1) {
+            return (float) str_replace(',', '.', $matches[1]);
+        }
+
+        $words = [
+            'un' => 1,
+            'una' => 1,
+            'uno' => 1,
+            'dos' => 2,
+            'tres' => 3,
+            'cuatro' => 4,
+            'cinco' => 5,
+            'seis' => 6,
+            'siete' => 7,
+            'ocho' => 8,
+            'nueve' => 9,
+            'diez' => 10,
+        ];
+
+        foreach ($words as $word => $quantity) {
+            if (preg_match('/\b'.preg_quote($word, '/').'\b/', $normalized) === 1) {
+                return (float) $quantity;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{status: string, product?: Producto, reply?: string}
+     */
+    private function resolveProductFromPrompt(string $prompt): array
+    {
+        $promptTokens = collect(explode(' ', $this->saleSearchText($prompt)))
+            ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
+            ->map(fn (string $token): string => $this->singularToken($token))
+            ->values();
+
+        if ($promptTokens->isEmpty()) {
+            return [
+                'status' => 'blocked',
+                'reply' => 'Para preparar la venta necesito el producto. Ejemplo: `vendí 2 conos sencillos en efectivo`.',
+            ];
+        }
+
+        $matches = Producto::query()
+            ->where('activo', true)
+            ->orderBy('nombre')
+            ->get()
+            ->map(function (Producto $product) use ($prompt, $promptTokens): array {
+                $productTokens = collect(explode(' ', $this->normalizeText($product->nombre)))
+                    ->filter(fn (string $token): bool => mb_strlen($token) >= 3)
+                    ->map(fn (string $token): string => $this->singularToken($token))
+                    ->values();
+
+                $score = $productTokens
+                    ->filter(fn (string $token): bool => $promptTokens->contains($token))
+                    ->count();
+
+                $exactName = str_contains($this->normalizeText($prompt), $this->normalizeText($product->nombre));
+
+                return [
+                    'product' => $product,
+                    'score' => $exactName ? $score + 5 : $score,
+                ];
+            })
+            ->filter(fn (array $match): bool => $match['score'] > 0)
+            ->sortByDesc('score')
+            ->values();
+
+        if ($matches->isEmpty()) {
+            return [
+                'status' => 'blocked',
+                'reply' => 'No encontre un producto activo claro para esa venta. Dime el nombre exacto del producto.',
+            ];
+        }
+
+        $best = $matches->first();
+        $sameScore = $matches
+            ->filter(fn (array $match): bool => $match['score'] === $best['score'])
+            ->values();
+
+        if ($sameScore->count() > 1) {
+            $options = $sameScore
+                ->take(5)
+                ->map(fn (array $match): string => '- '.$match['product']->nombre.' ($'.number_format((float) $match['product']->precio_venta, 2).')')
+                ->implode("\n");
+
+            return [
+                'status' => 'blocked',
+                'reply' => "Encontre varios productos posibles. Dime cual quieres vender:\n{$options}",
+            ];
+        }
+
+        return [
+            'status' => 'resolved',
+            'product' => $best['product'],
+        ];
+    }
+
+    private function saleSearchText(string $prompt): string
+    {
+        return Str::of($prompt)
+            ->lower()
+            ->ascii()
+            ->replaceMatches('/\b(registra|registrar|registre|vendi|vendí|venta|vender|vendio|vendió|cobra|cobrar|cobre|de|del|la|el|los|las|en|por|con|pago|pagaron|cliente|efectivo|tarjeta|transferencia|mixto|pesos|peso|mxn)\b/', ' ')
+            ->replaceMatches('/\b\d+(?:[.,]\d+)?\b/', ' ')
+            ->squish()
+            ->toString();
+    }
+
+    private function extractPaymentMethod(string $prompt): string
+    {
+        $normalized = $this->normalizeText($prompt);
+
+        return match (true) {
+            str_contains($normalized, 'tarjeta') => 'tarjeta',
+            str_contains($normalized, 'transferencia') => 'transferencia',
+            str_contains($normalized, 'mixto') => 'mixto',
+            default => 'efectivo',
+        };
+    }
+
+    private function singularToken(string $token): string
+    {
+        if (str_ends_with($token, 'es') && mb_strlen($token) > 4) {
+            return mb_substr($token, 0, -2);
+        }
+
+        if (str_ends_with($token, 's') && mb_strlen($token) > 3) {
+            return mb_substr($token, 0, -1);
+        }
+
+        return $token;
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function preparedSaleReply(array $result): string
+    {
+        $summary = $result['resumen'] ?? [];
+        $lines = collect($summary['lineas'] ?? [])
+            ->map(fn (array $line): string => sprintf(
+                '- %s x %s a $%s = $%s',
+                number_format((float) ($line['cantidad'] ?? 0), 2),
+                $line['nombre'] ?? 'producto',
+                number_format((float) ($line['precio_unitario'] ?? 0), 2),
+                number_format((float) ($line['subtotal'] ?? 0), 2),
+            ))
+            ->implode("\n");
+
+        return "Venta preparada, sin guardar todavia.\n\n{$lines}\nMetodo: ".($summary['metodo_pago'] ?? 'efectivo')."\nTotal: $".number_format((float) ($summary['total'] ?? 0), 2)."\n\nResponde `confirmar` para registrar la venta o `cancelar` para descartarla.";
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function blockedSaleReply(array $result): string
+    {
+        $errors = collect($result['errores'] ?? data_get($result, 'contexto.errores', []))
+            ->filter()
+            ->map(fn (string $error): string => '- '.$error)
+            ->implode("\n");
+
+        return "No pude preparar la venta.\n\n".($errors !== '' ? $errors : 'Falta informacion para preparar la venta.');
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function confirmOperation(string $operation, string $token): array
@@ -479,11 +792,7 @@ PROMPT;
 
     private function isConfirmationIntent(string $message): bool
     {
-        $normalized = Str::of($message)
-            ->lower()
-            ->ascii()
-            ->squish()
-            ->toString();
+        $normalized = $this->normalizeText($message);
 
         if ($this->isCancellationIntent($normalized)) {
             return false;
@@ -494,13 +803,34 @@ PROMPT;
 
     private function isCancellationIntent(string $message): bool
     {
-        $normalized = Str::of($message)
+        $normalized = $this->normalizeText($message);
+
+        return preg_match('/\b(no|cancela|cancelalo|cancelala|deten|espera|no confirmo)\b/', $normalized) === 1;
+    }
+
+    private function isSaleIntent(string $message): bool
+    {
+        $normalized = $this->normalizeText($message);
+
+        return preg_match('/\b(vendi|vendio|venta|registra|registrar|cobra|cobrar)\b/', $normalized) === 1
+            && ! preg_match('/\b(caja|insumo|categoria|producto nuevo|alta|inventario|movimiento|cierre|abrir)\b/', $normalized);
+    }
+
+    private function isMutationIntent(string $message): bool
+    {
+        $normalized = $this->normalizeText($message);
+
+        return $this->isSaleIntent($normalized)
+            || preg_match('/\b(abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar|registra|registrar|cobra|cobrar)\b/', $normalized) === 1;
+    }
+
+    private function normalizeText(string $message): string
+    {
+        return Str::of($message)
             ->lower()
             ->ascii()
             ->squish()
             ->toString();
-
-        return preg_match('/\b(no|cancela|cancelalo|cancelala|deten|espera|no confirmo)\b/', $normalized) === 1;
     }
 
     private function decodeToolResult(mixed $result): mixed
