@@ -61,6 +61,20 @@ test('asistente page loads for authenticated users', function () {
         ->assertSee('qwen/qwen3.5-122b-a10b');
 });
 
+test('operations agent prompt documents compound process protocol', function () {
+    $instructions = (string) OperationsAgent::make()->instructions();
+
+    expect($instructions)
+        ->toContain('OBJETIVOS COMPUESTOS')
+        ->toContain('Categoria')
+        ->toContain('Producto')
+        ->toContain('Caja')
+        ->toContain('Venta')
+        ->toContain('auto_create_inventory_item=true')
+        ->toContain('No inventes precio_venta ni costo_estimado')
+        ->toContain('Si no hay tool_result');
+});
+
 test('assistant chat restores session history', function () {
     $user = User::factory()->create();
 
@@ -97,6 +111,107 @@ test('openrouter assistant uses laravel ai agent', function () {
         ->and($response['tool_results'])->toBe([]);
 
     OperationsAgent::assertPrompted('Dame el resumen de caja');
+});
+
+test('assistant does not report success for mutation when no tool was used', function () {
+    IntentParserAgent::fake([
+        [
+            'route' => 'agent_tools',
+            'active_flow' => 'alta_producto',
+            'flow_status' => 'continue',
+            'intent' => 'otra',
+            'confidence' => 0.8,
+            'items' => [],
+            'metodo_pago' => 'desconocido',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+    ])->preventStrayPrompts();
+
+    OperationsAgent::fake([
+        'Listo.',
+    ])->preventStrayPrompts();
+
+    $assistant = app(OpenRouterAssistantService::class);
+    $response = $assistant->respond([
+        ['role' => 'user', 'content' => 'crea un producto nuevo para vender'],
+        ['role' => 'user', 'content' => 'paleta simple 25'],
+    ], User::factory()->create());
+
+    expect($response['reply'])->toContain('No ejecute ningun cambio')
+        ->and($response['tool_results'])->toBe([])
+        ->and($response['pending_confirmations'])->toBe([]);
+});
+
+test('assistant keeps sale draft when caja is closed and resumes after opening caja', function () {
+    $this->seed([
+        UnitSeeder::class,
+        InventoryCategorySeeder::class,
+        CategoriaProductoSeeder::class,
+    ]);
+
+    $user = User::factory()->create();
+    $unit = Unit::query()->firstOrFail();
+    $category = CategoriaProducto::query()->where('activo', true)->firstOrFail();
+    $inventoryItem = InventoryItem::query()->create([
+        'unit_id' => $unit->id,
+        'name' => 'Paleta memoria AI',
+        'current_stock' => 10,
+        'minimum_stock' => 0,
+        'average_cost' => 5,
+        'allows_decimals' => false,
+        'is_sellable' => true,
+        'is_consumable' => true,
+        'is_active' => true,
+    ]);
+    $product = Producto::query()->create([
+        'categoria_producto_id' => $category->id,
+        'nombre' => 'Paleta memoria AI',
+        'precio_venta' => 25,
+        'costo_estimado' => 5,
+        'product_type' => 'simple',
+        'inventory_item_id' => $inventoryItem->id,
+        'activo' => true,
+    ]);
+
+    IntentParserAgent::fake([
+        [
+            'route' => 'deterministic_sale',
+            'active_flow' => 'venta',
+            'flow_status' => 'ready_to_prepare',
+            'intent' => 'registrar_venta',
+            'confidence' => 0.95,
+            'items' => [
+                ['producto_nombre' => $product->nombre, 'cantidad' => 1],
+            ],
+            'metodo_pago' => 'efectivo',
+            'missing_fields' => [],
+            'notes' => null,
+        ],
+    ])->preventStrayPrompts();
+
+    $assistant = app(OpenRouterAssistantService::class);
+    $blocked = $assistant->respond([
+        ['role' => 'user', 'content' => 'vende una paleta memoria en efectivo'],
+    ], $user);
+
+    expect($blocked['pending_confirmations'][0]['operation'])->toBe('venta_incompleta')
+        ->and($blocked['reply'])->toContain('Me falta abrir caja');
+
+    CorteCaja::query()->create([
+        'user_id' => $user->id,
+        'fecha_apertura' => now(),
+        'monto_inicial' => 200,
+        'estado' => 'abierto',
+    ]);
+
+    $prepared = $assistant->respond([
+        ['role' => 'user', 'content' => 'condirmo'],
+    ], $user, $blocked['pending_confirmations']);
+
+    expect($prepared['tool_results'][0]['result']['status'])->toBe('requires_confirmation')
+        ->and($prepared['tool_results'][0]['result']['operacion'])->toBe('venta')
+        ->and($prepared['pending_confirmations'][0]['operation'])->toBe('venta');
 });
 
 test('assistant does not force vague follow ups into the sale flow', function () {
@@ -298,6 +413,36 @@ test('assistant page shows confirmation modal and confirms prepared tool operati
         ->assertSee('Operacion confirmada');
 
     expect(Insumo::query()->where('nombre', 'Azucar modal AI')->exists())->toBeTrue();
+});
+
+test('assistant page opens confirmation modal when there are multiple pending operations', function () {
+    $user = User::factory()->create();
+
+    Volt::actingAs($user)
+        ->test('asistente.index')
+        ->set('pendingConfirmations', [
+            [
+                'operation' => 'alta_insumo',
+                'confirmation_token' => 'token-insumo',
+                'summary' => [
+                    'nombre' => 'Azucar pendiente AI',
+                    'unidad_medida' => 'kg',
+                    'cantidad_actual' => 5,
+                    'cantidad_minima' => 1,
+                    'costo_unitario' => 22,
+                ],
+            ],
+            [
+                'operation' => 'alta_categoria',
+                'confirmation_token' => 'token-categoria',
+                'summary' => [
+                    'categoria' => 'Promociones AI',
+                ],
+            ],
+        ])
+        ->assertSee('Confirmar alta de insumo')
+        ->assertSee('Azucar pendiente AI')
+        ->assertSee('Confirmar y guardar');
 });
 
 test('laravel ai agent can invoke operations tool', function () {

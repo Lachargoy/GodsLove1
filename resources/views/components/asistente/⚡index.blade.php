@@ -67,11 +67,13 @@ new class extends Component
 
     public function confirmarPendiente(OpenRouterAssistantService $assistant): void
     {
-        if ($this->getConfirmationModalProperty() === null) {
+        $pending = $this->confirmablePendingConfirmation();
+
+        if ($pending === null) {
             return;
         }
 
-        $this->sendAssistantMessage($assistant, 'confirmar');
+        $this->sendAssistantMessage($assistant, 'confirmar', [$pending]);
     }
 
     public function cancelarPendiente(OpenRouterAssistantService $assistant): void
@@ -83,10 +85,14 @@ new class extends Component
         $this->sendAssistantMessage($assistant, 'cancelar');
     }
 
-    private function sendAssistantMessage(OpenRouterAssistantService $assistant, string $message): void
+    /**
+     * @param  array<int, array<string, mixed>>|null  $pendingConfirmations
+     */
+    private function sendAssistantMessage(OpenRouterAssistantService $assistant, string $message, ?array $pendingConfirmations = null): void
     {
         $this->error = null;
         $this->lastToolResults = [];
+        $pendingContext = $pendingConfirmations ?? $this->pendingConfirmations;
         $this->messages[] = [
             'role' => 'user',
             'content' => $message,
@@ -94,12 +100,14 @@ new class extends Component
 
         try {
             $response = $this->loopMode
-                ? $assistant->planAndExecute($this->messages, auth()->user(), $this->pendingConfirmations)
-                : $assistant->respond($this->messages, auth()->user(), $this->pendingConfirmations);
+                ? $assistant->planAndExecute($this->messages, auth()->user(), $pendingContext)
+                : $assistant->respond($this->messages, auth()->user(), $pendingContext);
 
             $this->messages = $response['messages'];
             $this->lastToolResults = $response['tool_results'];
-            $this->pendingConfirmations = $response['pending_confirmations'];
+            $this->pendingConfirmations = $pendingConfirmations === null
+                ? $response['pending_confirmations']
+                : $this->mergeReturnedPendingConfirmations($pendingContext, $response['pending_confirmations']);
             $this->lastLoopSteps = $response['loop_steps'] ?? [];
             $this->toast = $this->toastFromResponse($response);
             $this->persistConversation();
@@ -164,13 +172,9 @@ new class extends Component
      */
     public function getConfirmationModalProperty(): ?array
     {
-        if (count($this->pendingConfirmations) !== 1) {
-            return null;
-        }
+        $pending = $this->confirmablePendingConfirmation();
 
-        $pending = array_values($this->pendingConfirmations)[0];
-
-        if (blank($pending['confirmation_token'] ?? null)) {
+        if ($pending === null) {
             return null;
         }
 
@@ -184,6 +188,15 @@ new class extends Component
             'meta' => $this->confirmationMeta($summary),
             'total' => is_numeric(data_get($summary, 'total')) ? '$'.number_format((float) data_get($summary, 'total'), 2) : null,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function confirmablePendingConfirmation(): ?array
+    {
+        return collect($this->pendingConfirmations)
+            ->first(fn (array $pending): bool => filled($pending['confirmation_token'] ?? null));
     }
 
     private function operationLabel(string $operation): string
@@ -298,6 +311,27 @@ new class extends Component
             $this->historySessionKey() => $this->messages,
             $this->confirmationsSessionKey() => $this->pendingConfirmations,
         ]);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $sent
+     * @param  array<int, array<string, mixed>>  $returned
+     * @return array<int, array<string, mixed>>
+     */
+    private function mergeReturnedPendingConfirmations(array $sent, array $returned): array
+    {
+        $sentTokens = collect($sent)
+            ->pluck('confirmation_token')
+            ->filter()
+            ->all();
+
+        $remainingOriginal = collect($this->pendingConfirmations)
+            ->reject(fn (array $pending): bool => in_array($pending['confirmation_token'] ?? null, $sentTokens, true));
+
+        return $remainingOriginal
+            ->merge($returned)
+            ->values()
+            ->all();
     }
 
     private function historySessionKey(): string

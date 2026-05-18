@@ -16,26 +16,54 @@ new class extends Component
     public string $insumo_descripcion = '';
     public string $gasto_nombre = '';
     public string $gasto_descripcion = '';
+    public string $estadoFilter = 'activos';
 
-    public function getCategoriasProductoProperty()
+    public function categoriasProducto()
     {
         return CategoriaProducto::query()
+            ->when($this->estadoFilter === 'activos', function ($query) {
+                $query->where('activo', true);
+            })
+            ->when($this->estadoFilter === 'inactivos', function ($query) {
+                $query->where('activo', false);
+            })
             ->orderBy('nombre')
             ->get();
     }
 
-    public function getCategoriasInsumoProperty()
+    public function categoriasInsumo()
     {
         return CategoriaInsumo::query()
+            ->when($this->estadoFilter === 'activos', function ($query) {
+                $query->where('activo', true);
+            })
+            ->when($this->estadoFilter === 'inactivos', function ($query) {
+                $query->where('activo', false);
+            })
             ->orderBy('nombre')
             ->get();
     }
 
-    public function getCategoriasGastoProperty()
+    public function categoriasGasto()
     {
         return CategoriaGasto::query()
+            ->when($this->estadoFilter === 'activos', function ($query) {
+                $query->where('activo', true);
+            })
+            ->when($this->estadoFilter === 'inactivos', function ($query) {
+                $query->where('activo', false);
+            })
             ->orderBy('nombre')
             ->get();
+    }
+
+    public function filtrarEstado(string $estado): void
+    {
+        if (! in_array($estado, ['activos', 'todos', 'inactivos'], true)) {
+            return;
+        }
+
+        $this->estadoFilter = $estado;
     }
 
     public function guardarCategoriaProducto(): void
@@ -259,18 +287,31 @@ new class extends Component
     <div class="grid gap-4 md:grid-cols-3">
         <div class="app-stat-card">
             <p class="text-sm text-slate-500">Categorias de productos</p>
-            <p class="mt-2 text-3xl font-semibold text-slate-900">{{ $this->categoriasProducto->count() }}</p>
+            <p class="mt-2 text-3xl font-semibold text-slate-900">{{ $this->categoriasProducto()->count() }}</p>
         </div>
 
         <div class="app-stat-card">
             <p class="text-sm text-slate-500">Categorias de insumos</p>
-            <p class="mt-2 text-3xl font-semibold text-slate-900">{{ $this->categoriasInsumo->count() }}</p>
+            <p class="mt-2 text-3xl font-semibold text-slate-900">{{ $this->categoriasInsumo()->count() }}</p>
         </div>
 
         <div class="app-stat-card">
             <p class="text-sm text-slate-500">Categorias de gastos</p>
-            <p class="mt-2 text-3xl font-semibold text-slate-900">{{ $this->categoriasGasto->count() }}</p>
+            <p class="mt-2 text-3xl font-semibold text-slate-900">{{ $this->categoriasGasto()->count() }}</p>
         </div>
+    </div>
+
+    <div class="app-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <h2 class="text-base font-semibold text-slate-900">Filtro de estado</h2>
+            <p class="text-sm text-slate-500">Por defecto solo ves categorias activas. Cambia el filtro para revisar o reactivar categorias ocultas.</p>
+        </div>
+
+        <select wire:change="filtrarEstado($event.target.value)" class="w-full rounded-2xl border-slate-300 bg-white text-sm sm:w-56">
+            <option value="activos" @selected($estadoFilter === 'activos')>Solo activas</option>
+            <option value="todos" @selected($estadoFilter === 'todos')>Todas</option>
+            <option value="inactivos" @selected($estadoFilter === 'inactivos')>Solo inactivas</option>
+        </select>
     </div>
 
     <div class="grid gap-6 xl:grid-cols-3">
@@ -312,7 +353,7 @@ new class extends Component
 
             <div class="app-card-muted space-y-2">
                 <p class="text-sm font-semibold text-slate-900">Existentes</p>
-                @foreach ($this->categoriasProducto as $categoria)
+                @foreach ($this->categoriasProducto() as $categoria)
                     <div wire:key="categoria-producto-{{ $categoria->id }}" class="rounded-xl border border-slate-200 bg-white px-3 py-3">
                         <div class="flex items-start justify-between gap-3">
                             <div>
@@ -376,7 +417,7 @@ new class extends Component
 
             <div class="app-card-muted space-y-2">
                 <p class="text-sm font-semibold text-slate-900">Existentes</p>
-                @foreach ($this->categoriasInsumo as $categoria)
+                @foreach ($this->categoriasInsumo() as $categoria)
                     <div wire:key="categoria-insumo-{{ $categoria->id }}" class="rounded-xl border border-slate-200 bg-white px-3 py-3">
                         <div class="flex items-start justify-between gap-3">
                             <div>
@@ -440,7 +481,7 @@ new class extends Component
 
             <div class="app-card-muted space-y-2">
                 <p class="text-sm font-semibold text-slate-900">Existentes</p>
-                @foreach ($this->categoriasGasto as $categoria)
+                @foreach ($this->categoriasGasto() as $categoria)
                     <div wire:key="categoria-gasto-{{ $categoria->id }}" class="rounded-xl border border-slate-200 bg-white px-3 py-3">
                         <div class="flex items-start justify-between gap-3">
                             <div>

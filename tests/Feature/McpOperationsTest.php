@@ -13,6 +13,7 @@ use App\Mcp\Tools\ConfirmarOpcionesProductoTool;
 use App\Mcp\Tools\ConfirmarRecetaProductoTool;
 use App\Mcp\Tools\ConfirmarVentaTool;
 use App\Mcp\Tools\ConsultarInventarioTool;
+use App\Mcp\Tools\ConsultarVentasTool;
 use App\Mcp\Tools\EstimarVentaTool;
 use App\Mcp\Tools\PrepararAbrirCajaTool;
 use App\Mcp\Tools\PrepararAltaCategoriaTool;
@@ -35,6 +36,7 @@ use App\Models\ProductRecipe;
 use App\Models\Unit;
 use App\Models\User;
 use App\Models\Venta;
+use App\Services\VentaService;
 use Database\Seeders\CategoriaGastoSeeder;
 use Database\Seeders\CategoriaInsumoSeeder;
 use Database\Seeders\CategoriaProductoSeeder;
@@ -63,12 +65,15 @@ beforeEach(function () {
 
 test('mcp expone documentacion y contratos basicos', function () {
     $inventoryTool = new ConsultarInventarioTool;
+    $salesTool = new ConsultarVentasTool;
     $productTool = new BuscarProductoTool;
 
     expect($inventoryTool->toArray())
         ->toHaveKey('inputSchema')
         ->and($inventoryTool->toArray()['annotations'])
         ->toHaveKey((new IsReadOnly)->key())
+        ->and($salesTool->description())
+        ->toContain('desglose por producto')
         ->and($productTool->description())
         ->toContain('No modifica datos');
 
@@ -173,6 +178,44 @@ test('preparar y confirmar venta crea venta y consume token una sola vez', funct
 
     expect(Venta::query()->count())->toBe(1)
         ->and(MovimientoInventario::query()->where('tipo', 'venta')->count())->toBeGreaterThan(0);
+});
+
+test('consulta ventas con desglose de productos tickets y metodos de pago', function () {
+    $user = User::factory()->create();
+    $product = Producto::query()->where('nombre', 'Cono sencillo')->firstOrFail();
+
+    CorteCaja::query()->create([
+        'user_id' => $user->id,
+        'fecha_apertura' => now(),
+        'monto_inicial' => 500,
+        'estado' => 'abierto',
+    ]);
+
+    app(VentaService::class)->crearVenta([
+        ['producto_id' => $product->id, 'cantidad' => 2],
+    ], [
+        'user_id' => $user->id,
+        'metodo_pago' => 'efectivo',
+        'fecha_venta' => now(),
+    ]);
+
+    $response = OperationsServer::actingAs($user)->tool(ConsultarVentasTool::class, [
+        'limit' => 10,
+    ]);
+
+    $response
+        ->assertOk()
+        ->assertSee('consultar_ventas')
+        ->assertSee('Cono sencillo')
+        ->assertSee('por_metodo_pago')
+        ->assertSee('tickets');
+
+    $payload = responsePayload($response);
+
+    expect($payload['resumen']['tickets'])->toBe(1)
+        ->and($payload['productos'][0]['producto'])->toBe('Cono sencillo')
+        ->and($payload['productos'][0]['cantidad_total'])->toBe(2.0)
+        ->and($payload['tickets'][0]['lineas'][0]['producto'])->toBe('Cono sencillo');
 });
 
 test('abrir caja requiere preparar y confirmar', function () {
@@ -371,6 +414,42 @@ test('preparar y confirmar alta de categoria y producto crea registros de catalo
         ->and($product->product_type)->toBe('simple')
         ->and($product->inventory_item_id)->toBe($inventoryItem->id)
         ->and($inventoryItem->fresh()->is_sellable)->toBeTrue();
+});
+
+test('preparar alta de producto simple puede crear inventario automaticamente', function () {
+    $user = User::factory()->create();
+
+    $prepared = OperationsServer::actingAs($user)->tool(PrepararAltaProductoTool::class, [
+        'nombre' => 'Paleta prueba AI',
+        'categoria_producto_nombre' => 'Helados',
+        'precio_venta' => 25,
+        'costo_estimado' => 0,
+        'product_type' => 'simple',
+        'auto_create_inventory_item' => true,
+        'stock_inicial' => 100,
+        'unidad_medida' => 'pieza',
+    ]);
+
+    $prepared
+        ->assertOk()
+        ->assertSee('requires_confirmation')
+        ->assertSee('crear_inventory_item');
+
+    expect(Producto::query()->where('nombre', 'Paleta prueba AI')->exists())->toBeFalse()
+        ->and(InventoryItem::query()->where('name', 'Paleta prueba AI')->exists())->toBeFalse();
+
+    OperationsServer::actingAs($user)->tool(ConfirmarAltaProductoTool::class, [
+        'confirmation_token' => responsePayload($prepared)['confirmation_token'],
+    ])
+        ->assertOk()
+        ->assertSee('confirmed');
+
+    $product = Producto::query()->where('nombre', 'Paleta prueba AI')->firstOrFail();
+    $inventoryItem = InventoryItem::query()->where('name', 'Paleta prueba AI')->firstOrFail();
+
+    expect($product->inventory_item_id)->toBe($inventoryItem->id)
+        ->and((float) $inventoryItem->current_stock)->toBe(100.0)
+        ->and((bool) $inventoryItem->is_sellable)->toBeTrue();
 });
 
 test('preparar y confirmar receta y opciones configura producto', function () {

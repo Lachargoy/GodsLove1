@@ -11,6 +11,7 @@ new class extends Component
 {
     public string $search = '';
     public string $categoria_insumo_id = '';
+    public string $estadoFilter = 'activos';
     public string $nombre = '';
     public string $tipo_uso = 'receta';
     public string $unidad_medida = 'pieza';
@@ -29,7 +30,7 @@ new class extends Component
             ->get();
     }
 
-    public function getInsumosProperty()
+    public function insumos()
     {
         return Insumo::query()
             ->with(['categoria', 'inventoryItem'])
@@ -38,6 +39,12 @@ new class extends Component
             })
             ->when($this->categoria_insumo_id !== '', function ($query) {
                 $query->where('categoria_insumo_id', $this->categoria_insumo_id);
+            })
+            ->when($this->estadoFilter === 'activos', function ($query) {
+                $query->where('activo', true);
+            })
+            ->when($this->estadoFilter === 'inactivos', function ($query) {
+                $query->where('activo', false);
             })
             ->orderByDesc('created_at')
             ->get();
@@ -69,6 +76,15 @@ new class extends Component
             ->where('activo', true)
             ->get()
             ->sum(fn (Insumo $insumo) => (float) $insumo->cantidad_actual * (float) $insumo->costo_unitario);
+    }
+
+    public function filtrarEstado(string $estado): void
+    {
+        if (! in_array($estado, ['activos', 'todos', 'inactivos'], true)) {
+            return;
+        }
+
+        $this->estadoFilter = $estado;
     }
 
     public function guardar(): void
@@ -370,7 +386,10 @@ new class extends Component
         $this->reset([
             'search',
             'categoria_insumo_id',
+            'estadoFilter',
         ]);
+
+        $this->estadoFilter = 'activos';
     }
 };
 ?>
@@ -593,6 +612,15 @@ new class extends Component
                     </select>
                 </div>
 
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700">Estado</label>
+                    <select wire:change="filtrarEstado($event.target.value)" class="w-full rounded-xl border-slate-300 text-sm">
+                        <option value="activos" @selected($estadoFilter === 'activos')>Solo activos</option>
+                        <option value="todos" @selected($estadoFilter === 'todos')>Todos</option>
+                        <option value="inactivos" @selected($estadoFilter === 'inactivos')>Solo inactivos</option>
+                    </select>
+                </div>
+
                 <button
                     type="button"
                     wire:click="limpiarFiltros"
@@ -628,7 +656,7 @@ new class extends Component
                 </thead>
 
                 <tbody>
-                    @forelse ($this->insumos as $insumo)
+                    @forelse ($this->insumos() as $insumo)
                         @php
                             $inventarioBajo = (float) $insumo->cantidad_actual <= (float) $insumo->cantidad_minima;
                             $valorInventario = (float) $insumo->cantidad_actual * (float) $insumo->costo_unitario;

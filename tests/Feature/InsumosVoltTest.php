@@ -1,8 +1,8 @@
 <?php
 
 use App\Models\CategoriaInsumo;
-use App\Models\InventoryItem;
 use App\Models\Insumo;
+use App\Models\InventoryItem;
 use App\Models\MovimientoInventario;
 use App\Models\Unit;
 use App\Models\User;
@@ -112,15 +112,36 @@ test('puede activar y desactivar insumo', function () {
 
     Livewire::test('insumos.index')
         ->call('toggleActivo', $insumo->id)
+        ->assertDontSee('Conos')
+        ->call('filtrarEstado', 'inactivos')
+        ->assertSee('Conos')
         ->assertSee('Activar');
 
     expect((bool) $insumo->fresh()->activo)->toBeFalse();
 
     Livewire::test('insumos.index')
+        ->call('filtrarEstado', 'inactivos')
         ->call('toggleActivo', $insumo->id)
+        ->assertDontSee('Conos')
+        ->call('filtrarEstado', 'activos')
+        ->assertSee('Conos')
         ->assertSee('Desactivar');
 
     expect((bool) $insumo->fresh()->activo)->toBeTrue();
+});
+
+test('insumos inactivos se ocultan por defecto y se pueden filtrar', function () {
+    $insumo = Insumo::query()->where('nombre', 'Conos')->firstOrFail();
+    $insumo->update(['activo' => false]);
+
+    Livewire::test('insumos.index')
+        ->assertSet('estadoFilter', 'activos')
+        ->assertDontSee('Conos')
+        ->call('filtrarEstado', 'todos')
+        ->assertSee('Conos')
+        ->call('filtrarEstado', 'inactivos')
+        ->assertSee('Conos')
+        ->assertDontSee('Servilletas');
 });
 
 test('puede editar campos de insumo inline y sincroniza inventario', function () {

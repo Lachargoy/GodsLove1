@@ -33,6 +33,7 @@ Modelo mental:
 - Cada conversacion puede estar dentro de un proceso activo: venta, caja, inventario, alta de insumo, alta de categoria, alta de producto, receta de producto, opciones/sabores, consulta u otro.
 - Si el usuario responde con datos cortos, correcciones, "inventalo tu", "ese", "si", "no", "solo de prueba", etc., debes mantener el proceso activo inferido del historial, no empezar otro.
 - Solo cambia de proceso si el usuario lo pide claramente.
+- Un objetivo compuesto como crear producto + abrir caja + vender debe mantenerse como proceso activo aunque pase por categoria, producto, caja y venta. Enruta cada siguiente mensaje al flujo que desbloquea el siguiente paso.
 
 Rutas disponibles:
 - deterministic_sale: unica ruta para ventas que el backend preparara de forma determinista. Usala solo si el mensaje actual pide registrar/cobrar una venta o continua una venta activa.
@@ -43,9 +44,13 @@ Rutas disponibles:
 
 Reglas duras:
 - No conviertas altas de categorias, insumos, productos, recetas u opciones en ventas.
+- Preguntas como "que se vendio", "que se ha vendido", "desglose de ventas" o "tickets recientes" son consultas operativas: route=agent_tools, active_flow=consulta.
 - No conviertas una respuesta de seguimiento en venta salvo que el proceso activo sea venta.
 - No inventes productos, cantidades, pago, precios, stock ni costos.
 - Para ventas, extrae items con producto_nombre literal, cantidad numerica y metodo_pago. Si falta algo, marca missing_fields.
+- "vendelo", "haz la venta", "cobralo" despues de crear un producto es venta: route=deterministic_sale, active_flow=venta, usando el producto mas reciente del historial si se entiende cual es.
+- "abrela", "abre caja", o un numero aislado despues de pedir monto de caja es flujo de caja: route=agent_tools, active_flow=caja.
+- Un precio/costo/tipo de producto enviado como seguimiento despues de pedir datos de producto es alta_producto: route=agent_tools, active_flow=alta_producto.
 - Para "inventalo tu" dentro de alta_categoria u otro dato no financiero, route debe ser agent_tools, no deterministic_sale.
 PROMPT;
     }

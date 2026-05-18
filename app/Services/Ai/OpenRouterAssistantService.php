@@ -53,16 +53,16 @@ class OpenRouterAssistantService
             );
         }
 
-        if ($this->isConfirmationIntent($prompt) && $pendingConfirmations !== []) {
-            return $this->confirmFromPending($visibleHistory, $pendingConfirmations);
-        }
-
         if ($this->hasIncompleteSale($pendingConfirmations)) {
             $completedSale = $this->completeIncompleteSale($visibleHistory, $prompt, $pendingConfirmations);
 
             if ($completedSale !== null) {
                 return $completedSale;
             }
+        }
+
+        if ($this->isConfirmationIntent($prompt) && $pendingConfirmations !== []) {
+            return $this->confirmFromPending($visibleHistory, $pendingConfirmations);
         }
 
         $intent = $this->parseIntent($prompt, $previousMessages);
@@ -76,7 +76,7 @@ class OpenRouterAssistantService
             );
         }
 
-        if ($pendingConfirmations !== [] && $this->isMutationIntent($intent, $prompt)) {
+        if ($pendingConfirmations !== [] && $this->isMutationIntent($intent, $prompt) && ! ($this->hasIncompleteSale($pendingConfirmations) && $this->isOpenCashRegisterIntent($prompt))) {
             return $this->pendingOperationBlock($visibleHistory, $pendingConfirmations);
         }
 
@@ -86,6 +86,15 @@ class OpenRouterAssistantService
 
         $response = $this->promptAgent($prompt, $previousMessages, $pendingConfirmations);
         $toolResults = $response['tool_results'];
+
+        if ($toolResults === [] && $this->isSuccessLikeNoToolReply($response['reply']) && ($this->isMutationIntent($intent, $prompt) || $this->historyLooksLikeMutation($visibleHistory))) {
+            return $this->directReply(
+                $visibleHistory,
+                'No ejecute ningun cambio ni prepare ninguna operacion. Para modificar datos necesito usar una tool y dejarte una confirmacion clara. Dime los datos que faltan o vuelve a pedirmelo con nombre, cantidad y precio/metodo segun aplique.',
+                [],
+                $pendingConfirmations,
+            );
+        }
 
         $assistantMessage = [
             'role' => 'assistant',
@@ -133,20 +142,6 @@ class OpenRouterAssistantService
             ];
         }
 
-        if ($this->isConfirmationIntent($goal) && $pendingConfirmations !== []) {
-            $result = $this->confirmFromPending($visibleHistory, $pendingConfirmations);
-
-            return [
-                ...$result,
-                'loop_steps' => [[
-                    'tipo' => 'confirm',
-                    'estado' => data_get($result, 'tool_results.0.result.status') === 'confirmed' ? 'completed' : 'blocked',
-                    'resumen' => $result['reply'],
-                    'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
-                ]],
-            ];
-        }
-
         if ($this->hasIncompleteSale($pendingConfirmations)) {
             $result = $this->completeIncompleteSale($visibleHistory, $goal, $pendingConfirmations);
 
@@ -161,6 +156,20 @@ class OpenRouterAssistantService
                     ]],
                 ];
             }
+        }
+
+        if ($this->isConfirmationIntent($goal) && $pendingConfirmations !== []) {
+            $result = $this->confirmFromPending($visibleHistory, $pendingConfirmations);
+
+            return [
+                ...$result,
+                'loop_steps' => [[
+                    'tipo' => 'confirm',
+                    'estado' => data_get($result, 'tool_results.0.result.status') === 'confirmed' ? 'completed' : 'blocked',
+                    'resumen' => $result['reply'],
+                    'tools' => collect($result['tool_results'])->pluck('name')->values()->all(),
+                ]],
+            ];
         }
 
         $intent = $this->parseIntent($goal, array_slice($visibleHistory, 0, $lastUserIndex));
@@ -182,7 +191,7 @@ class OpenRouterAssistantService
             ];
         }
 
-        if ($pendingConfirmations !== [] && $this->isMutationIntent($intent, $goal)) {
+        if ($pendingConfirmations !== [] && $this->isMutationIntent($intent, $goal) && ! ($this->hasIncompleteSale($pendingConfirmations) && $this->isOpenCashRegisterIntent($goal))) {
             return [
                 ...$this->pendingOperationBlock($visibleHistory, $pendingConfirmations),
                 'loop_steps' => [[
@@ -249,7 +258,7 @@ class OpenRouterAssistantService
 
             $allToolResults = [...$allToolResults, ...$stepResponse['tool_results']];
             $currentPendingConfirmations = $this->mergePendingConfirmations($currentPendingConfirmations, $stepResponse['tool_results']);
-            $status = $this->loopStatus($stepResponse['reply'], $stepResponse['tool_results'], $currentPendingConfirmations);
+            $status = $this->loopStatus($goal, $stepResponse['reply'], $stepResponse['tool_results'], $currentPendingConfirmations);
 
             $steps[] = [
                 'tipo' => 'execute',
@@ -413,6 +422,7 @@ Clasifica y extrae la intencion. Si es venta, devuelve producto_nombre, cantidad
 Devuelve route, active_flow y flow_status siguiendo la maquina de estados del system prompt.
 Usa route=deterministic_sale solo para ventas reales o continuacion de una venta activa.
 Usa route=agent_tools para altas de categorias, insumos, productos, recetas, opciones, caja, inventario y seguimientos de esos procesos.
+Usa route=agent_tools para preguntas sobre ventas ya registradas: que se vendio, desglose de ventas, tickets recientes o productos vendidos.
 PROMPT;
     }
 
@@ -555,7 +565,11 @@ PROMPT;
 Trabaja en MODO PLAN para esta meta del usuario:
 {$goal}
 
-Primero escribe un plan breve de 3 a 6 pasos. No ejecutes confirmaciones. Puedes usar tools de consulta si son necesarias para planear. Marca claramente "Plan:" y termina con "Empiezo ejecucion controlada.".
+Haz un plan operativo de 3 a 8 pasos para completar la meta completa, no solo el primer paso.
+Si la meta implica crear producto y vender, incluye estas fases en orden: categoria, producto, caja, venta, confirmacion final.
+No ejecutes confirmar_* en el plan. Puedes usar tools de consulta si son necesarias para planear.
+No pidas IDs al usuario si puedes resolver por nombre o crear con preparar_*.
+Marca claramente "Plan:" y termina con "Empiezo ejecucion controlada.".
 PROMPT;
     }
 
@@ -571,10 +585,13 @@ Estas en MODO LOOP controlado, paso {$step}.
 Meta original: {$goal}
 Pasos previos: {$previousSteps}
 
-Ejecuta solo el siguiente paso util usando tools si hace falta. No llames confirmar_* salvo que el usuario ya haya confirmado explicitamente en el historial y exista token vigente.
+Ejecuta solo el siguiente paso util usando tools si hace falta. Para metas que crean, venden, abren/cerran caja o modifican inventario, no respondas "Listo" ni "LOOP_COMPLETED" si no llamaste una tool y no hay confirmation_token o resultado confirmado.
+No llames confirmar_* salvo que el usuario ya haya confirmado explicitamente en el historial y exista token vigente.
 Si preparas una operacion con confirmation_token, detente y pide confirmacion.
-Si ya terminaste, responde empezando con "LOOP_COMPLETED:" y resume lo logrado.
+Si una operacion queda confirmada y aun falta parte de la meta original, responde con el siguiente paso necesario; no declares terminado.
+Si ya terminaste toda la meta original, responde empezando con "LOOP_COMPLETED:" y resume lo logrado con evidencia de tool.
 Si falta informacion del usuario, responde empezando con "LOOP_BLOCKED:" y pregunta solo lo necesario.
+Para pruebas puedes usar defaults no financieros: categoria Productos de Prueba, producto Producto de Prueba 001, simple, auto_create_inventory_item=true, stock_inicial=100, unidad pieza. Precio/costo solo si el usuario los dio.
 PROMPT;
     }
 
@@ -582,10 +599,14 @@ PROMPT;
      * @param  array<int, array<string, mixed>>  $toolResults
      * @param  array<int, array<string, mixed>>  $pendingConfirmations
      */
-    private function loopStatus(string $reply, array $toolResults, array $pendingConfirmations): string
+    private function loopStatus(string $goal, string $reply, array $toolResults, array $pendingConfirmations): string
     {
         if ($pendingConfirmations !== []) {
             return 'waiting_confirmation';
+        }
+
+        if ($toolResults === [] && $this->looksLikeMutationText($goal) && $this->isSuccessLikeNoToolReply($reply)) {
+            return 'blocked';
         }
 
         if (str_contains($reply, 'LOOP_COMPLETED:')) {
@@ -771,6 +792,30 @@ PROMPT;
                 return $this->prepareSaleFromIntent($messages, $intent);
             }
 
+            if ($items !== [] && $this->missingOnlyPaymentMethod($missingFields)) {
+                $saleItems = [];
+
+                foreach ($items as $item) {
+                    $productResolution = $this->resolveProductByName((string) ($item['producto_nombre'] ?? ''));
+
+                    if (($productResolution['status'] ?? null) !== 'resolved') {
+                        return $this->directReply($messages, (string) $productResolution['reply'], [], []);
+                    }
+
+                    $saleItems[] = [
+                        'producto_id' => $productResolution['product']->id,
+                        'cantidad' => (float) ($item['cantidad'] ?? 1),
+                        'selected_options' => $item['selected_options'] ?? [],
+                    ];
+                }
+
+                $pending = $this->incompleteSalePending($saleItems, 'desconocido', [
+                    'errores' => ['Falta metodo de pago.'],
+                ]);
+
+                return $this->directReply($messages, $this->incompleteSaleReply($pending), [], [$pending]);
+            }
+
             return $this->directReply(
                 $messages,
                 $this->missingSaleFieldsReply($missingFields, $items),
@@ -842,6 +887,17 @@ PROMPT;
             );
         }
 
+        if ($this->isMissingOpenCashRegister($result)) {
+            $pending = $this->incompleteSalePending($saleItems, $paymentMethod, $result);
+
+            return $this->directReply(
+                $messages,
+                $this->incompleteSaleReply($pending),
+                $toolResults,
+                [$pending],
+            );
+        }
+
         return $this->directReply(
             $messages,
             $this->blockedSaleReply($result),
@@ -867,6 +923,19 @@ PROMPT;
                     || str_contains($normalized, 'opcion')
                     || str_contains($normalized, 'configuracion');
             });
+    }
+
+    /**
+     * @param  array<int, string>  $missingFields
+     */
+    private function missingOnlyPaymentMethod(array $missingFields): bool
+    {
+        if ($missingFields === []) {
+            return false;
+        }
+
+        return collect($missingFields)
+            ->every(fn (string $field): bool => str_contains($this->normalizeText($field), 'metodo'));
     }
 
     /**
@@ -913,6 +982,19 @@ PROMPT;
     }
 
     /**
+     * @param  array<string, mixed>  $result
+     */
+    private function isMissingOpenCashRegister(array $result): bool
+    {
+        if (($result['status'] ?? null) !== 'blocked') {
+            return false;
+        }
+
+        return collect($result['errores'] ?? data_get($result, 'contexto.errores', []))
+            ->contains(fn (string $error): bool => str_contains($this->normalizeText($error), 'no hay una caja'));
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $saleItems
      * @param  array<string, mixed>  $result
      * @return array<string, mixed>
@@ -956,6 +1038,18 @@ PROMPT;
 
         $missing = $this->missingOptionsText($pending);
         $availableOptions = $this->availableMissingOptionsText($pending);
+
+        if (($pending['payment_method'] ?? null) === 'desconocido') {
+            return "Ya tengo la venta en borrador, sin guardar todavia:\n\n{$lines}\n\nMe falta el metodo de pago. Dime `efectivo`, `tarjeta`, `transferencia` o `mixto`.";
+        }
+
+        if ($this->pendingSaleNeedsOpenCashRegister($pending)) {
+            return "Ya tengo la venta en borrador, sin guardar todavia:\n\n{$lines}\nMetodo: ".($pending['payment_method'] ?? 'efectivo')."\n\nMe falta abrir caja para poder registrarla. Dime `abre caja con 200` o, si es prueba, `abre caja con 0`.";
+        }
+
+        if (! $this->pendingSaleRequiresOptions($pending)) {
+            return "Ya tengo la venta en borrador, sin guardar todavia:\n\n{$lines}\nMetodo: ".($pending['payment_method'] ?? 'efectivo')."\n\nCuando haya caja abierta, responde `confirmar` y preparo la venta para tu confirmacion final.";
+        }
 
         return "Ya tengo la venta en borrador, sin guardar todavia:\n\n{$lines}\nMetodo: ".($pending['payment_method'] ?? 'efectivo')."\n\nMe falta {$missing}.{$availableOptions}\n\nElige de la lista, por ejemplo: `los 2 de nuez` o `uno de fresa y uno de vainilla`.";
     }
@@ -1048,6 +1142,24 @@ PROMPT;
     }
 
     /**
+     * @param  array<string, mixed>  $pending
+     */
+    private function pendingSaleNeedsOpenCashRegister(array $pending): bool
+    {
+        return collect(data_get($pending, 'summary.errores', []))
+            ->contains(fn (string $error): bool => str_contains($this->normalizeText($error), 'no hay una caja'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $pending
+     */
+    private function pendingSaleRequiresOptions(array $pending): bool
+    {
+        return collect(data_get($pending, 'summary.errores', []))
+            ->contains(fn (string $error): bool => str_contains($this->normalizeText($error), 'requiere al menos'));
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $pendingConfirmations
      */
     private function hasIncompleteSale(array $pendingConfirmations): bool
@@ -1069,7 +1181,30 @@ PROMPT;
             return null;
         }
 
+        if ($this->isOpenCashRegisterIntent($prompt)) {
+            return null;
+        }
+
+        $paymentMethod = (string) ($pending['payment_method'] ?? 'efectivo');
+
+        if ($paymentMethod === 'desconocido') {
+            $paymentMethod = $this->paymentMethodFromPrompt($prompt) ?? 'desconocido';
+
+            if ($paymentMethod === 'desconocido') {
+                return $this->directReply(
+                    $messages,
+                    $this->incompleteSaleReply($pending),
+                    [],
+                    $pendingConfirmations,
+                );
+            }
+        }
+
         $saleItems = $this->saleItemsWithOptionsFromPrompt($pending['items'] ?? [], $prompt);
+
+        if ($saleItems === null && ! $this->pendingSaleRequiresOptions($pending)) {
+            $saleItems = $pending['items'] ?? [];
+        }
 
         if ($saleItems === null) {
             return $this->directReply(
@@ -1080,7 +1215,6 @@ PROMPT;
             );
         }
 
-        $paymentMethod = (string) ($pending['payment_method'] ?? 'efectivo');
         $result = $this->operations->prepareSale($saleItems, 0, $paymentMethod);
         $toolResults = [[
             'name' => 'operacion_godslove',
@@ -1097,6 +1231,17 @@ PROMPT;
         }
 
         if ($this->isMissingConfigurableOptions($result)) {
+            $newPending = $this->incompleteSalePending($saleItems, $paymentMethod, $result);
+
+            return $this->directReply(
+                $messages,
+                $this->incompleteSaleReply($newPending),
+                $toolResults,
+                [$newPending],
+            );
+        }
+
+        if ($this->isMissingOpenCashRegister($result)) {
             $newPending = $this->incompleteSalePending($saleItems, $paymentMethod, $result);
 
             return $this->directReply(
@@ -1399,6 +1544,25 @@ PROMPT;
             );
         }
 
+        if ($operation === 'alta_producto') {
+            return sprintf(
+                'Producto confirmado y guardado: %s (ID %s), precio $%s, tipo %s.',
+                data_get($result, 'producto.nombre', 'producto'),
+                data_get($result, 'producto.id', 'sin ID'),
+                number_format((float) data_get($result, 'producto.precio_venta', 0), 2),
+                data_get($result, 'producto.tipo', 'no indicado'),
+            );
+        }
+
+        if ($operation === 'alta_categoria') {
+            return sprintf(
+                'Categoria confirmada y guardada: %s (ID %s), tipo %s.',
+                data_get($result, 'categoria.nombre', 'categoria'),
+                data_get($result, 'categoria.id', 'sin ID'),
+                data_get($result, 'categoria.tipo', 'no indicado'),
+            );
+        }
+
         return 'Operacion confirmada y guardada: '.$operation.'.';
     }
 
@@ -1410,7 +1574,7 @@ PROMPT;
             return false;
         }
 
-        return preg_match('/\b(si|confirmo|confirma|confirmar|dale|ok|va|hazlo|adelante|autorizo|registralo|registrala|guardalo|guardala)\b/', $normalized) === 1;
+        return preg_match('/\b(si|confirmo|confirma|confirmar|condirmo|dale|ok|va|hazlo|adelante|autorizo|registralo|registrala|guardalo|guardala)\b/', $normalized) === 1;
     }
 
     private function isCancellationIntent(string $message): bool
@@ -1425,20 +1589,69 @@ PROMPT;
      */
     private function isMutationIntent(array $intent, string $message): bool
     {
+        if (in_array($intent['active_flow'] ?? null, ['caja', 'inventario', 'alta_insumo', 'alta_categoria', 'alta_producto', 'receta_producto', 'opciones_producto'], true)) {
+            return true;
+        }
+
         if (($intent['intent'] ?? null) === 'registrar_venta') {
             return true;
         }
 
         $normalized = $this->normalizeText($message);
 
-        return preg_match('/\b(abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar|registra|registrar|cobra|cobrar)\b/', $normalized) === 1;
+        return preg_match('/\b(vende|vender|vendelo|vendela|abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar|registra|registrar|cobra|cobrar)\b/', $normalized) === 1;
+    }
+
+    private function isOpenCashRegisterIntent(string $message): bool
+    {
+        $normalized = $this->normalizeText($message);
+
+        return str_contains($normalized, 'abre')
+            || str_contains($normalized, 'abrir caja')
+            || str_contains($normalized, 'apertura');
+    }
+
+    private function paymentMethodFromPrompt(string $message): ?string
+    {
+        $normalized = $this->normalizeText($message);
+
+        return match (true) {
+            str_contains($normalized, 'efectivo') => 'efectivo',
+            str_contains($normalized, 'tarjeta') => 'tarjeta',
+            str_contains($normalized, 'transferencia') => 'transferencia',
+            str_contains($normalized, 'mixto') => 'mixto',
+            default => null,
+        };
     }
 
     private function looksLikeMutationText(string $message): bool
     {
         $normalized = $this->normalizeText($message);
 
-        return preg_match('/\b(vendi|vendio|venta|registra|registrar|cobra|cobrar|abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar)\b/', $normalized) === 1;
+        return preg_match('/\b(vendi|vendio|vende|vender|vendelo|vendela|venta|registra|registrar|cobra|cobrar|abre|abrir|cierra|cerrar|alta|crea|crear|agrega|agregar|movimiento|ajusta|ajustar)\b/', $normalized) === 1;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $messages
+     */
+    private function historyLooksLikeMutation(array $messages): bool
+    {
+        return collect($messages)
+            ->where('role', 'user')
+            ->take(-3)
+            ->contains(fn (array $message): bool => $this->looksLikeMutationText((string) ($message['content'] ?? '')));
+    }
+
+    private function isSuccessLikeNoToolReply(string $reply): bool
+    {
+        $normalized = trim($this->normalizeText($reply), ".! \t\n\r\0\x0B");
+
+        return $normalized === 'listo'
+            || str_starts_with($normalized, 'listo ')
+            || str_contains($normalized, 'loop_completed')
+            || str_contains($normalized, 'se creo')
+            || str_contains($normalized, 'se registro')
+            || str_contains($normalized, 'guardado');
     }
 
     private function normalizeText(string $message): string

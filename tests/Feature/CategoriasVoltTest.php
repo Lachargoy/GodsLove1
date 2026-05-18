@@ -118,6 +118,31 @@ test('puede activar y desactivar categoria de insumo desde volt', function () {
     expect((bool) $categoria->fresh()->activo)->toBeTrue();
 });
 
+test('categorias inactivas se ocultan por defecto y se pueden filtrar', function () {
+    $categoriaProducto = CategoriaProducto::query()->where('nombre', 'Helados')->firstOrFail();
+    $categoriaInsumo = CategoriaInsumo::query()->where('nombre', 'Desechables')->firstOrFail();
+    $categoriaGasto = CategoriaGasto::query()->where('nombre', 'Renta')->firstOrFail();
+
+    $categoriaProducto->update(['activo' => false]);
+    $categoriaInsumo->update(['activo' => false]);
+    $categoriaGasto->update(['activo' => false]);
+
+    Livewire::test('categorias.index')
+        ->assertSet('estadoFilter', 'activos')
+        ->assertDontSee('Helados')
+        ->assertDontSee('Desechables')
+        ->assertDontSee('Renta')
+        ->call('filtrarEstado', 'todos')
+        ->assertSee('Helados')
+        ->assertSee('Desechables')
+        ->assertSee('Renta')
+        ->call('filtrarEstado', 'inactivos')
+        ->assertSee('Helados')
+        ->assertSee('Desechables')
+        ->assertSee('Renta')
+        ->assertDontSee('Toppings');
+});
+
 test('puede editar y desactivar categoria de gasto desde volt', function () {
     $categoria = CategoriaGasto::query()->where('nombre', 'Renta')->firstOrFail();
 

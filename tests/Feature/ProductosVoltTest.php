@@ -95,15 +95,35 @@ test('puede activar y desactivar producto', function () {
 
     Livewire::test('productos.index')
         ->call('toggleActivo', $producto->id)
-        ->assertSee('Activar');
+        ->assertDontSee('Cono sencillo')
+        ->call('filtrarEstado', 'inactivos')
+        ->assertSet('estadoFilter', 'inactivos');
 
     expect((bool) $producto->fresh()->activo)->toBeFalse();
 
     Livewire::test('productos.index')
+        ->call('filtrarEstado', 'inactivos')
         ->call('toggleActivo', $producto->id)
-        ->assertSee('Desactivar');
+        ->assertDontSee('Cono sencillo')
+        ->call('filtrarEstado', 'activos')
+        ->assertSet('estadoFilter', 'activos');
 
     expect((bool) $producto->fresh()->activo)->toBeTrue();
+});
+
+test('productos inactivos se ocultan por defecto y se pueden filtrar', function () {
+    $producto = Producto::query()->where('nombre', 'Cono sencillo')->firstOrFail();
+    $producto->update(['activo' => false]);
+
+    $component = Livewire::test('productos.index')
+        ->assertSet('estadoFilter', 'activos')
+        ->assertDontSee('Cono sencillo')
+        ->call('filtrarEstado', 'todos')
+        ->assertSet('estadoFilter', 'todos');
+
+    $component
+        ->call('filtrarEstado', 'inactivos')
+        ->assertSet('estadoFilter', 'inactivos');
 });
 
 test('puede editar precio y costo de un producto existente', function () {

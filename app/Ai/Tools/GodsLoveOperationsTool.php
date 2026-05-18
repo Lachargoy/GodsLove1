@@ -24,7 +24,7 @@ class GodsLoveOperationsTool implements Tool
     {
         return <<<'TEXT'
 Ejecuta operaciones permitidas de GodsLove sin SQL libre. Acciones disponibles:
-consultar_inventario, buscar_producto, resumen_caja, estimar_venta,
+consultar_inventario, buscar_producto, resumen_caja, consultar_ventas, estimar_venta,
 preparar_venta, confirmar_venta, preparar_abrir_caja, confirmar_abrir_caja,
 preparar_cerrar_caja, confirmar_cerrar_caja, preparar_movimiento_inventario,
 confirmar_movimiento_inventario, preparar_alta_insumo, confirmar_alta_insumo,
@@ -52,6 +52,12 @@ TEXT;
                     activeOnly: ! $request->has('active_only') || $request->boolean('active_only'),
                 ),
                 'resumen_caja' => $this->operations->cashSummary(),
+                'consultar_ventas' => $this->operations->salesBreakdown(
+                    dateFrom: data_get($arguments, 'fecha_inicio'),
+                    dateTo: data_get($arguments, 'fecha_fin'),
+                    cashRegisterId: $request->filled('corte_caja_id') ? $request->integer('corte_caja_id') : null,
+                    limit: $request->filled('limit') ? $request->integer('limit') : 25,
+                ),
                 'estimar_venta' => $this->operations->estimateSale(
                     items: $request->array('items'),
                     discount: (float) data_get($arguments, 'descuento', 0),
@@ -104,6 +110,10 @@ TEXT;
                     inventoryItemId: $request->filled('inventory_item_id') ? $request->integer('inventory_item_id') : null,
                     optionGroupName: data_get($arguments, 'option_group_name'),
                     requiredQuantity: $request->filled('required_quantity') ? (float) data_get($arguments, 'required_quantity') : null,
+                    categoryName: data_get($arguments, 'categoria_producto_nombre'),
+                    autoCreateInventoryItem: $request->boolean('auto_create_inventory_item'),
+                    initialStock: $request->filled('stock_inicial') ? (float) data_get($arguments, 'stock_inicial') : null,
+                    unitName: data_get($arguments, 'unidad_medida'),
                 ),
                 'confirmar_alta_producto' => $this->operations->confirmCreateProduct((string) data_get($arguments, 'confirmation_token')),
                 'preparar_receta_producto' => $this->operations->prepareProductRecipe(
@@ -147,6 +157,7 @@ TEXT;
                     'consultar_inventario',
                     'buscar_producto',
                     'resumen_caja',
+                    'consultar_ventas',
                     'estimar_venta',
                     'preparar_venta',
                     'confirmar_venta',
@@ -172,6 +183,7 @@ TEXT;
             'search' => $schema->string()->description('Texto de busqueda para inventario o productos.')->nullable(),
             'only_low' => $schema->boolean()->description('Solo inventario bajo.')->nullable(),
             'categoria_producto_id' => $schema->integer()->description('Filtro opcional de categoria de producto.')->nullable(),
+            'categoria_producto_nombre' => $schema->string()->description('Nombre de categoria de producto cuando no se conoce el ID.')->nullable(),
             'active_only' => $schema->boolean()->description('Solo productos activos.')->nullable(),
             'items' => $schema->array()
                 ->items($schema->object([
@@ -185,11 +197,17 @@ TEXT;
                 ->nullable(),
             'descuento' => $schema->number()->description('Descuento de venta.')->nullable(),
             'metodo_pago' => $schema->string()->enum(['efectivo', 'tarjeta', 'transferencia', 'mixto'])->nullable(),
+            'fecha_inicio' => $schema->string()->description('Fecha inicial para consultar ventas, formato YYYY-MM-DD. Si se omite, usa caja abierta u hoy.')->nullable(),
+            'fecha_fin' => $schema->string()->description('Fecha final para consultar ventas, formato YYYY-MM-DD.')->nullable(),
+            'corte_caja_id' => $schema->integer()->description('ID de corte/caja para consultar ventas de ese turno.')->nullable(),
+            'limit' => $schema->integer()->description('Maximo de tickets detallados para consultar_ventas, entre 1 y 100.')->nullable(),
             'confirmation_token' => $schema->string()->description('Token devuelto por una accion preparar_*.')->nullable(),
             'monto_inicial' => $schema->number()->description('Monto inicial para abrir caja.')->nullable(),
             'monto_real' => $schema->number()->description('Monto contado para cerrar caja.')->nullable(),
             'observaciones' => $schema->string()->description('Notas de cierre de caja.')->nullable(),
             'inventory_item_id' => $schema->integer()->description('ID del item de inventario.')->nullable(),
+            'auto_create_inventory_item' => $schema->boolean()->description('Solo para product_type=simple: crear item de inventario junto con el producto. Util en pruebas o productos directos nuevos.')->nullable(),
+            'stock_inicial' => $schema->number()->description('Stock inicial para auto_create_inventory_item. En pruebas puede usarse 100.')->nullable(),
             'movement_type' => $schema->string()->enum(['purchase', 'manual_in', 'manual_out', 'waste', 'return'])->nullable(),
             'quantity' => $schema->number()->description('Cantidad del movimiento de inventario.')->nullable(),
             'unit_cost' => $schema->number()->description('Costo unitario opcional.')->nullable(),

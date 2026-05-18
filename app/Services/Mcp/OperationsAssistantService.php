@@ -65,6 +65,10 @@ class OperationsAssistantService
                     'consultar_inventario para stock general o bajo',
                     'buscar_producto para saber como descuenta un producto',
                 ],
+                'consultar_ventas' => [
+                    'consultar_ventas para saber que se vendio en el turno, hoy o un rango',
+                    'responder con desglose por producto, metodo de pago y tickets recientes',
+                ],
                 'abrir_caja' => [
                     'resumen_caja',
                     'preparar_abrir_caja',
@@ -112,6 +116,7 @@ class OperationsAssistantService
             'ejemplos' => [
                 'Vendi 2 conos dobles en efectivo' => 'buscar_producto, estimar_venta, preparar_venta, confirmar_venta',
                 'Que inventario esta bajo' => 'consultar_inventario',
+                'Que se ha vendido' => 'consultar_ventas',
                 'Abre caja con 500' => 'resumen_caja, preparar_abrir_caja, confirmar_abrir_caja',
                 'Cierra caja con 2730 contado' => 'resumen_caja, preparar_cerrar_caja, confirmar_cerrar_caja',
                 'Da de alta azucar con 10 kg a 24 pesos' => 'consultar_inventario, preparar_alta_insumo, confirmar_alta_insumo',
@@ -397,6 +402,146 @@ class OperationsAssistantService
                 'tickets' => $paidSales->count(),
                 'total_ventas' => round((float) $paidSales->sum('total'), 2),
             ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function salesBreakdown(?string $dateFrom = null, ?string $dateTo = null, ?int $cashRegisterId = null, int $limit = 25): array
+    {
+        $limit = max(1, min($limit, 100));
+        $startedAt = $dateFrom !== null ? Carbon::parse($dateFrom)->startOfDay() : null;
+        $endedAt = $dateTo !== null ? Carbon::parse($dateTo)->endOfDay() : null;
+        $cashRegister = null;
+        $scope = 'rango';
+
+        if ($cashRegisterId !== null) {
+            $cashRegister = CorteCaja::query()->whereKey($cashRegisterId)->first();
+
+            if (! $cashRegister instanceof CorteCaja) {
+                return $this->operationBlocked('consultar_ventas', ['No encontre el corte de caja solicitado.']);
+            }
+        }
+
+        if ($cashRegisterId === null && $startedAt === null && $endedAt === null) {
+            $cashRegister = CorteCaja::query()->where('estado', 'abierto')->latest('fecha_apertura')->first();
+        }
+
+        if ($startedAt === null && $endedAt === null && $cashRegister instanceof CorteCaja) {
+            $startedAt = Carbon::parse($cashRegister->fecha_apertura);
+            $endedAt = $cashRegister->fecha_cierre ? Carbon::parse($cashRegister->fecha_cierre) : now();
+            $scope = $cashRegister->estado === 'abierto' ? 'caja_abierta' : 'corte_caja';
+        }
+
+        if ($startedAt === null && $endedAt === null) {
+            $startedAt = now()->startOfDay();
+            $endedAt = now()->endOfDay();
+            $scope = 'hoy';
+        }
+
+        $sales = Venta::query()
+            ->with([
+                'detalles.producto',
+                'detalles.components.inventoryItem.unit',
+                'corteCaja:id,estado,fecha_apertura,fecha_cierre',
+                'user:id,name',
+            ])
+            ->where('estado', 'pagada')
+            ->when($cashRegister instanceof CorteCaja, fn (Builder $query): Builder => $query->where('corte_caja_id', $cashRegister->id))
+            ->when($startedAt instanceof Carbon, fn (Builder $query): Builder => $query->where('fecha_venta', '>=', $startedAt))
+            ->when($endedAt instanceof Carbon, fn (Builder $query): Builder => $query->where('fecha_venta', '<=', $endedAt))
+            ->latest('fecha_venta')
+            ->limit($limit)
+            ->get();
+
+        $details = $sales
+            ->flatMap(fn (Venta $sale): Collection => $sale->detalles->map(fn ($detail): array => [
+                'venta_id' => $sale->id,
+                'producto_id' => $detail->producto_id,
+                'producto' => $detail->producto?->nombre ?? 'Producto eliminado',
+                'cantidad' => (float) $detail->cantidad,
+                'precio_unitario' => (float) $detail->precio_unitario,
+                'subtotal' => (float) $detail->subtotal,
+                'costo_estimado' => round((float) $detail->costo_unitario_estimado * (float) $detail->cantidad, 2),
+            ]));
+
+        $productBreakdown = $details
+            ->groupBy('producto_id')
+            ->map(fn (Collection $items): array => [
+                'producto_id' => $items->first()['producto_id'],
+                'producto' => $items->first()['producto'],
+                'cantidad_total' => round((float) $items->sum('cantidad'), 3),
+                'total_vendido' => round((float) $items->sum('subtotal'), 2),
+                'costo_estimado' => round((float) $items->sum('costo_estimado'), 2),
+                'margen_estimado' => round((float) $items->sum('subtotal') - (float) $items->sum('costo_estimado'), 2),
+                'tickets' => $items->pluck('venta_id')->unique()->count(),
+                'precio_promedio' => $items->sum('cantidad') > 0
+                    ? round((float) $items->sum('subtotal') / (float) $items->sum('cantidad'), 2)
+                    : 0.0,
+            ])
+            ->sortByDesc('total_vendido')
+            ->values()
+            ->all();
+
+        return [
+            'status' => 'ok',
+            'operacion' => 'consultar_ventas',
+            'alcance' => [
+                'tipo' => $scope,
+                'fecha_inicio' => $startedAt?->toISOString(),
+                'fecha_fin' => $endedAt?->toISOString(),
+                'corte_caja_id' => $cashRegister?->id,
+                'caja_estado' => $cashRegister?->estado,
+                'limite_tickets' => $limit,
+            ],
+            'resumen' => [
+                'tickets' => $sales->count(),
+                'productos_distintos' => count($productBreakdown),
+                'unidades_vendidas' => round((float) $details->sum('cantidad'), 3),
+                'subtotal' => round((float) $sales->sum('subtotal'), 2),
+                'descuento' => round((float) $sales->sum('descuento'), 2),
+                'total' => round((float) $sales->sum('total'), 2),
+                'costo_estimado' => round((float) $details->sum('costo_estimado'), 2),
+                'margen_estimado' => round((float) $sales->sum('total') - (float) $details->sum('costo_estimado'), 2),
+                'por_metodo_pago' => [
+                    'efectivo' => $this->sumSalesByPaymentMethod($sales, 'efectivo'),
+                    'tarjeta' => $this->sumSalesByPaymentMethod($sales, 'tarjeta'),
+                    'transferencia' => $this->sumSalesByPaymentMethod($sales, 'transferencia'),
+                    'mixto' => $this->sumSalesByPaymentMethod($sales, 'mixto'),
+                ],
+            ],
+            'productos' => $productBreakdown,
+            'tickets' => $sales
+                ->map(fn (Venta $sale): array => [
+                    'id' => $sale->id,
+                    'folio' => $sale->folio,
+                    'fecha_venta' => Carbon::parse($sale->fecha_venta)->toISOString(),
+                    'metodo_pago' => $sale->metodo_pago,
+                    'subtotal' => (float) $sale->subtotal,
+                    'descuento' => (float) $sale->descuento,
+                    'total' => (float) $sale->total,
+                    'operador' => $sale->user?->name,
+                    'lineas' => $sale->detalles
+                        ->map(fn ($detail): array => [
+                            'producto_id' => $detail->producto_id,
+                            'producto' => $detail->producto?->nombre ?? 'Producto eliminado',
+                            'cantidad' => (float) $detail->cantidad,
+                            'precio_unitario' => (float) $detail->precio_unitario,
+                            'subtotal' => (float) $detail->subtotal,
+                            'componentes_inventario' => $detail->components
+                                ->map(fn ($component): array => [
+                                    'inventory_item_id' => $component->inventory_item_id,
+                                    'nombre' => $component->inventoryItem?->name,
+                                    'cantidad_consumida' => (float) $component->quantity_consumed,
+                                    'unidad' => $component->inventoryItem?->unit?->abbreviation,
+                                    'costo_total' => round((float) $component->total_cost, 2),
+                                ])
+                                ->all(),
+                        ])
+                        ->all(),
+                ])
+                ->all(),
         ];
     }
 
@@ -850,11 +995,28 @@ class OperationsAssistantService
         ?int $inventoryItemId = null,
         ?string $optionGroupName = null,
         ?float $requiredQuantity = null,
+        ?string $categoryName = null,
+        bool $autoCreateInventoryItem = false,
+        ?float $initialStock = null,
+        ?string $unitName = null,
     ): array {
         $name = trim($name);
         $productType = trim($productType);
         $description = filled($description) ? trim((string) $description) : null;
+        $categoryName = filled($categoryName) ? trim((string) $categoryName) : null;
+        $unitName = filled($unitName) ? trim((string) $unitName) : 'pieza';
         $errors = [];
+
+        if ($categoryId === null && $categoryName !== null) {
+            $matchedCategoryId = CategoriaProducto::query()
+                ->where('activo', true)
+                ->where('nombre', $categoryName)
+                ->value('id');
+
+            if ($matchedCategoryId !== null) {
+                $categoryId = (int) $matchedCategoryId;
+            }
+        }
 
         if ($name === '') {
             $errors[] = 'El nombre del producto es obligatorio.';
@@ -880,8 +1042,16 @@ class OperationsAssistantService
             $errors[] = 'La categoria de producto no existe o esta inactiva.';
         }
 
-        if ($productType === 'simple' && $inventoryItemId === null) {
+        if ($productType === 'simple' && $inventoryItemId === null && ! $autoCreateInventoryItem) {
             $errors[] = 'El producto simple requiere inventory_item_id.';
+        }
+
+        if ($productType === 'simple' && $autoCreateInventoryItem) {
+            $initialStock = $initialStock ?? 100.0;
+
+            if ($initialStock < 0) {
+                $errors[] = 'El stock inicial del item de inventario no puede ser negativo.';
+            }
         }
 
         if ($inventoryItemId !== null && ! InventoryItem::query()->whereKey($inventoryItemId)->where('is_active', true)->exists()) {
@@ -909,6 +1079,9 @@ class OperationsAssistantService
             'costo_estimado' => round((float) ($estimatedCost ?? 0), 2),
             'tipo' => $productType,
             'inventory_item_id' => $productType === 'simple' ? $inventoryItemId : null,
+            'crear_inventory_item' => $productType === 'simple' && $inventoryItemId === null && $autoCreateInventoryItem,
+            'stock_inicial' => $productType === 'simple' && $inventoryItemId === null && $autoCreateInventoryItem ? round((float) $initialStock, 3) : null,
+            'unidad_medida' => $productType === 'simple' && $inventoryItemId === null && $autoCreateInventoryItem ? $unitName : null,
             'grupo_opciones' => $productType === 'configurable' ? trim((string) $optionGroupName) : null,
             'opciones_requeridas' => $productType === 'configurable' ? round((float) $requiredQuantity, 3) : null,
         ];
@@ -925,6 +1098,9 @@ class OperationsAssistantService
             'costo_estimado' => round((float) ($estimatedCost ?? 0), 2),
             'product_type' => $productType,
             'inventory_item_id' => $productType === 'simple' ? $inventoryItemId : null,
+            'auto_create_inventory_item' => $productType === 'simple' && $inventoryItemId === null && $autoCreateInventoryItem,
+            'initial_stock' => $productType === 'simple' && $inventoryItemId === null && $autoCreateInventoryItem ? round((float) $initialStock, 3) : null,
+            'unit_name' => $productType === 'simple' && $inventoryItemId === null && $autoCreateInventoryItem ? $unitName : null,
             'option_group_name' => $productType === 'configurable' ? trim((string) $optionGroupName) : null,
             'required_quantity' => $productType === 'configurable' ? round((float) $requiredQuantity, 3) : null,
         ], $summary);
@@ -943,6 +1119,35 @@ class OperationsAssistantService
         }
 
         return DB::transaction(function () use ($payload): array {
+            $inventoryItemId = $payload['inventory_item_id'] ?? null;
+
+            if ($payload['product_type'] === 'simple' && ! $inventoryItemId && ($payload['auto_create_inventory_item'] ?? false)) {
+                $unit = $this->unitForName((string) ($payload['unit_name'] ?? 'pieza'));
+
+                $inventoryItem = InventoryItem::query()->create([
+                    'category_id' => Category::query()->firstOrCreate(
+                        [
+                            'type' => 'inventory_item',
+                            'name' => 'Productos de venta',
+                        ],
+                        [
+                            'is_active' => true,
+                        ],
+                    )->id,
+                    'unit_id' => $unit->id,
+                    'name' => $payload['nombre'],
+                    'current_stock' => (float) ($payload['initial_stock'] ?? 100),
+                    'minimum_stock' => 0,
+                    'average_cost' => (float) ($payload['costo_estimado'] ?? 0),
+                    'allows_decimals' => (bool) $unit->allows_decimals,
+                    'is_sellable' => true,
+                    'is_consumable' => true,
+                    'is_active' => true,
+                ]);
+
+                $inventoryItemId = $inventoryItem->id;
+            }
+
             $product = Producto::query()->create([
                 'categoria_producto_id' => $payload['categoria_producto_id'] ?? null,
                 'nombre' => $payload['nombre'],
@@ -950,13 +1155,13 @@ class OperationsAssistantService
                 'precio_venta' => (float) $payload['precio_venta'],
                 'costo_estimado' => (float) $payload['costo_estimado'],
                 'product_type' => $payload['product_type'],
-                'inventory_item_id' => $payload['product_type'] === 'simple' ? $payload['inventory_item_id'] : null,
+                'inventory_item_id' => $payload['product_type'] === 'simple' ? $inventoryItemId : null,
                 'activo' => true,
             ]);
 
-            if ($payload['product_type'] === 'simple') {
+            if ($payload['product_type'] === 'simple' && $inventoryItemId) {
                 InventoryItem::query()
-                    ->whereKey($payload['inventory_item_id'])
+                    ->whereKey($inventoryItemId)
                     ->update(['is_sellable' => true]);
             }
 

@@ -16,6 +16,7 @@ use App\Mcp\Tools\ConfirmarOpcionesProductoTool;
 use App\Mcp\Tools\ConfirmarRecetaProductoTool;
 use App\Mcp\Tools\ConfirmarVentaTool;
 use App\Mcp\Tools\ConsultarInventarioTool;
+use App\Mcp\Tools\ConsultarVentasTool;
 use App\Mcp\Tools\EstimarVentaTool;
 use App\Mcp\Tools\PrepararAbrirCajaTool;
 use App\Mcp\Tools\PrepararAltaCategoriaTool;
@@ -44,6 +45,7 @@ class OperationsServer extends Server
         ConsultarInventarioTool::class,
         BuscarProductoTool::class,
         ResumenCajaTool::class,
+        ConsultarVentasTool::class,
         EstimarVentaTool::class,
         PrepararVentaTool::class,
         ConfirmarVentaTool::class,

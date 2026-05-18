@@ -13,6 +13,7 @@ new class extends Component
 {
     public string $search = '';
     public string $filtro_categoria_producto_id = '';
+    public string $estadoFilter = 'activos';
     public string $editing_producto_id = '';
     public string $categoria_producto_id = '';
     public string $nombre = '';
@@ -55,7 +56,7 @@ new class extends Component
             ->get();
     }
 
-    public function getProductosProperty()
+    public function productos()
     {
         return Producto::query()
             ->with('categoria')
@@ -64,6 +65,12 @@ new class extends Component
             })
             ->when($this->filtro_categoria_producto_id !== '', function ($query) {
                 $query->where('categoria_producto_id', $this->filtro_categoria_producto_id);
+            })
+            ->when($this->estadoFilter === 'activos', function ($query) {
+                $query->where('activo', true);
+            })
+            ->when($this->estadoFilter === 'inactivos', function ($query) {
+                $query->where('activo', false);
             })
             ->orderByDesc('created_at')
             ->get();
@@ -86,6 +93,15 @@ new class extends Component
         return Producto::query()
             ->where('activo', false)
             ->count();
+    }
+
+    public function filtrarEstado(string $estado): void
+    {
+        if (! in_array($estado, ['activos', 'todos', 'inactivos'], true)) {
+            return;
+        }
+
+        $this->estadoFilter = $estado;
     }
 
     public function agregarLineaReceta(): void
@@ -313,7 +329,10 @@ new class extends Component
         $this->reset([
             'search',
             'filtro_categoria_producto_id',
+            'estadoFilter',
         ]);
+
+        $this->estadoFilter = 'activos';
     }
 
     private function resetProductForm(): void
@@ -777,6 +796,15 @@ new class extends Component
                         </select>
                     </div>
 
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700">Estado</label>
+                        <select wire:change="filtrarEstado($event.target.value)" class="w-full rounded-2xl border-slate-300 bg-white text-sm">
+                            <option value="activos" @selected($estadoFilter === 'activos')>Solo activos</option>
+                            <option value="todos" @selected($estadoFilter === 'todos')>Todos</option>
+                            <option value="inactivos" @selected($estadoFilter === 'inactivos')>Solo inactivos</option>
+                        </select>
+                    </div>
+
                     <button
                         type="button"
                         wire:click="limpiarFiltros"
@@ -812,7 +840,7 @@ new class extends Component
                 </thead>
 
                 <tbody>
-                    @forelse ($this->productos as $producto)
+                    @forelse ($this->productos() as $producto)
                         <tr wire:key="producto-{{ $producto->id }}">
                             <td class="p-3">
                                 <div class="font-medium text-slate-900">{{ $producto->nombre }}</div>
